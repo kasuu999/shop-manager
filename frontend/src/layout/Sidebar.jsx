@@ -17,7 +17,7 @@ import {
 // Single source of truth for nav items — add a page here and it shows up
 // in the sidebar automatically.
 const navItems = [
-  { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
+  { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, end: true },
   { to: "/products", label: "Products", icon: Package },
   { to: "/categories", label: "Categories", icon: Tags },
   { to: "/suppliers", label: "Suppliers", icon: Truck },
@@ -26,7 +26,7 @@ const navItems = [
   { to: "/sales", label: "Sales", icon: Receipt },
   { to: "/stock", label: "Stock", icon: Boxes },
   { to: "/reports", label: "Reports", icon: BarChart3 },
-  { to: "/settings", label: "Shop Settings", icon: Settings },
+  { to: "/shop-settings", label: "Shop Settings", icon: Settings },
 ];
 
 const linkClasses = ({ isActive }) =>
@@ -61,7 +61,7 @@ export default function Sidebar({ isOpen, onClose }) {
               <Store size={18} />
             </div>
             <span className="font-display text-lg font-semibold text-white">
-              Shop Manager
+              Moin Shop 
             </span>
           </div>
           {/* Close button, mobile only */}

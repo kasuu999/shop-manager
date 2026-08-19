@@ -1,6 +1,24 @@
-import { Menu, Bell, ChevronDown } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Menu, Bell, LogOut } from "lucide-react";
+
+// Simple logout: clear the token (and cached user info) from localStorage,
+// then send the user back to /login. No backend call needed for this —
+// JWT logout is just "the frontend stops sending/keeping the token".
+const handleLogout = (navigate) => {
+  localStorage.removeItem("token");
+  localStorage.removeItem("user");
+  navigate("/login");
+};
 
 export default function Header({ onMenuClick, pageTitle }) {
+  const navigate = useNavigate();
+
+  // Pull the saved user's name for a nicer header (falls back to "Account"
+  // if nothing was saved, so this never breaks even without that data).
+  const savedUser = JSON.parse(localStorage.getItem("user") || "null");
+  const displayName = savedUser?.name || "Account";
+  const initial = displayName.charAt(0).toUpperCase();
+
   return (
     <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-slate-200 bg-white px-4 sm:px-6">
       <div className="flex items-center gap-3">
@@ -22,15 +40,22 @@ export default function Header({ onMenuClick, pageTitle }) {
           <Bell size={19} />
         </button>
 
-        {/* Placeholder user menu — wired up once login exists */}
-        <button className="flex items-center gap-2 rounded-md py-1.5 pl-1.5 pr-2 hover:bg-slate-100">
+        <div className="flex items-center gap-2 rounded-md py-1.5 pl-1.5 pr-2">
           <div className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-100 text-sm font-semibold text-brand-700">
-            O
+            {initial}
           </div>
           <span className="hidden text-sm font-medium text-slate-700 sm:inline">
-            Owner
+            {displayName}
           </span>
-          <ChevronDown size={16} className="hidden text-slate-400 sm:inline" />
+        </div>
+
+        <button
+          onClick={() => handleLogout(navigate)}
+          className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-red-600"
+          aria-label="Log out"
+        >
+          <LogOut size={17} />
+          <span className="hidden sm:inline">Logout</span>
         </button>
       </div>
     </header>

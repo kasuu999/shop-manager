@@ -18,7 +18,7 @@ router.use(protect);
 
 router.get("/", authorize("owner", "staff"), getProducts);
 router.get("/barcode/:barcode", authorize("owner", "staff"), getProductByBarcode);
-router.post("/", authorize("owner"), createProduct);
+router.post("/", authorize("owner","staff"), createProduct);
 
 router.put(
   "/:id/image",

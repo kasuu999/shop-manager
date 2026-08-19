@@ -21,7 +21,7 @@ export const authorize = (...allowedRoles) => {
     if (!allowedRoles.includes(req.user.role)) {
       return res.status(403).json({
         success: false,
-        message: `Access denied. This action requires one of these roles: ${allowedRoles.join(", ")}`,
+        message: `Access denied. sirf owner kr skta hai staff nahi: ${allowedRoles.join(", ")}`,
       });
     }
 

@@ -3,13 +3,15 @@ import { useNavigate, Link } from "react-router-dom";
 import { Store } from "lucide-react";
 import api from "../api/axiosInstance.js";
 
-export default function Login() {
+// Matches your backend's POST /api/users/register exactly:
+// req.body = { name, number, password, role }
+export default function Register() {
   const navigate = useNavigate();
 
-  // Backend expects { number, password } — not email — so the form field
-  // is "number" to match exactly what POST /api/auth/login reads from req.body.
+  const [name, setName] = useState("");
   const [number, setNumber] = useState("");
   const [password, setPassword] = useState("");
+  const [role, setRole] = useState("owner"); // first-ever user is usually the shop owner
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -19,20 +21,14 @@ export default function Login() {
     setLoading(true);
 
     try {
-      const response = await api.post("/users/login", { number, password });
+      const response = await api.post("/users/register", { name, number, password, role });
       const { token, user } = response.data;
 
-      // Save the JWT so the shared Axios instance can attach it to future
-      // requests (see the request interceptor in axiosInstance.js).
       localStorage.setItem("token", token);
-
-      // Save user info too (name, role, etc.) — useful later for showing
-      // "Owner"/"Staff" in the header and for role-based UI decisions.
       localStorage.setItem("user", JSON.stringify(user));
 
-      navigate("/dashboard");
+      navigate("/"); // Dashboard is registered at "/" in AppRoutes.jsx
     } catch (err) {
-      // Backend sends { success: false, message: "..." } on failure
       const message = err.response?.data?.message || "Something went wrong. Please try again.";
       setError(message);
     } finally {
@@ -48,7 +44,7 @@ export default function Login() {
             <Store size={20} />
           </div>
           <h1 className="text-xl font-semibold text-ink-900">Shop Manager</h1>
-          <p className="mt-1 text-sm text-slate-500">Sign in to your account</p>
+          <p className="mt-1 text-sm text-slate-500">Create your account</p>
         </div>
 
         {error && (
@@ -58,6 +54,18 @@ export default function Login() {
         )}
 
         <form className="space-y-4" onSubmit={handleSubmit}>
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-slate-700">Name</label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+              placeholder="Your name"
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 placeholder:text-slate-400"
+            />
+          </div>
+
           <div>
             <label className="mb-1.5 block text-sm font-medium text-slate-700">
               Phone Number
@@ -71,10 +79,9 @@ export default function Login() {
               className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 placeholder:text-slate-400"
             />
           </div>
+
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-slate-700">
-              Password
-            </label>
+            <label className="mb-1.5 block text-sm font-medium text-slate-700">Password</label>
             <input
               type="password"
               value={password}
@@ -84,19 +91,32 @@ export default function Login() {
               className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 placeholder:text-slate-400"
             />
           </div>
+
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-slate-700">Role</label>
+            <select
+              value={role}
+              onChange={(e) => setRole(e.target.value)}
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700"
+            >
+              <option value="owner">Owner</option>
+              <option value="staff">Staff</option>
+            </select>
+          </div>
+
           <button
             type="submit"
             disabled={loading}
             className="w-full rounded-lg bg-brand-500 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-brand-600 disabled:cursor-not-allowed disabled:bg-brand-500/50"
           >
-            {loading ? "Signing in..." : "Sign In"}
+            {loading ? "Creating account..." : "Register"}
           </button>
         </form>
 
         <p className="mt-5 text-center text-sm text-slate-500">
-          Don't have an account?{" "}
-          <Link to="/register" className="font-medium text-brand-600 hover:underline">
-            Register
+          Already have an account?{" "}
+          <Link to="/login" className="font-medium text-brand-600 hover:underline">
+            Sign in
           </Link>
         </p>
       </div>

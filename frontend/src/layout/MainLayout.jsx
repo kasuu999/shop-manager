@@ -6,16 +6,16 @@ import Header from "./Header.jsx";
 // Maps a route path to the title shown in the header.
 // Keep this in sync with the routes defined in App.jsx.
 const pageTitles = {
-  "/": "Dashboard",
+  "/dashboard": "Dashboard",
   "/products": "Products",
   "/categories": "Categories",
   "/suppliers": "Suppliers",
   "/customers": "Customers",
-  "/purchases/report": "Purchases",
-  "/sales/report": "Sales",
-  "/stocks/report": "Stock",
+  "/purchases": "Purchases",
+  "/sales": "Sales",
+  "/stock": "Stock",
   "/reports": "Reports",
-  "/settings": "Shop Settings",
+  "/shop-settings": "Shop Settings",
 };
 
 export default function MainLayout() {

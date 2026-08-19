@@ -9,15 +9,18 @@ import supplierRoute from './routes/supplierRoute.js'
 import customerRoute from './routes/customerRoute.js'
 import purchaseRoute from './routes/purchaseRoute.js'
 import saleRoute from './routes/saleRoute.js'
-import stockHistoryRoute from './routes/saleRoute.js'
+import stockHistoryRoute from './routes/stockHistoryRoute.js'
 import dashboardRoute from './routes/dashboardRoute.js'
 import reportRoute from './routes/reportRoute.js'
 import shopRoute from './routes/shopRoute.js'
+import cors from "cors";
+
 
 const app=express()
 dotenv.config()
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
+app.use(cors());
 const port=3000
 connectDB()
 app.get("/",(req,res)=>{
