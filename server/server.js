@@ -52,6 +52,6 @@ app.use("/api/stock",stockHistoryRoute)
 app.use("/api/dashboard",dashboardRoute)
 app.use("/api/report",reportRoute)
 app.use("/api/shop",shopRoute)
-app.listen(port,()=>{
+app.listen(PORT,()=>{
     console.log(`server yaha chal rha hai ${PORT}`)
 })
