@@ -20,12 +20,27 @@ const app=express()
 dotenv.config()
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
-app.use(cors());
-const port=3000
+app.use(cors({
+  origin: [
+    "http://localhost:5173",
+    "https://moin-web.vercel.app"
+  ],
+  credentials: true
+}));
+const PORT = process.env.PORT || 3000;
 connectDB()
 app.get("/",(req,res)=>{
     res.send(" product ready")
 })
+
+
+app.use(cors({
+  origin: [
+    "http://localhost:5173",
+    "https://YOUR-FRONTEND.vercel.app"
+  ],
+  credentials: true
+}));
 app.use("/api/categories",categoryRoute)
 app.use("/api/users",userRoutes)
 app.use("/api/products",productRoute)
