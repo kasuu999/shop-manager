@@ -23,7 +23,7 @@ app.use(express.urlencoded({ extended: true }))
 app.use(cors({
   origin: [
     "http://localhost:5173",
-    "https://moin-web.vercel.app"
+    "https://moin-web.vercel.app/login",
   ],
   credentials: true
 }));
