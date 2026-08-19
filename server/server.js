@@ -53,5 +53,5 @@ app.use("/api/dashboard",dashboardRoute)
 app.use("/api/report",reportRoute)
 app.use("/api/shop",shopRoute)
 app.listen(port,()=>{
-    console.log(`server yaha chal rha hai ${port}`)
+    console.log(`server yaha chal rha hai ${PORT}`)
 })
