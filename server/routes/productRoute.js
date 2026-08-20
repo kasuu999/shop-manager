@@ -22,14 +22,14 @@ router.post("/", authorize("owner","staff"), createProduct);
 
 router.put(
   "/:id/image",
-  authorize("owner"),
+  authorize("owner","staff"),
   upload.single("image"),
   uploadProductImage
 );
 
 router.route("/:id")
   .get(authorize("owner", "staff"), getProductById)
-  .put(authorize("owner"), updateProduct)
-  .delete(authorize("owner"), deleteProduct);
+  .put(authorize("owner","staff"), updateProduct)
+  .delete(authorize("owner",), deleteProduct);
 
 export default router;

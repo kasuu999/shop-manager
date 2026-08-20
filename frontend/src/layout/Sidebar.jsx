@@ -15,18 +15,20 @@ import {
 } from "lucide-react";
 
 // Single source of truth for nav items — add a page here and it shows up
-// in the sidebar automatically.
+// in the sidebar automatically. `allowedRoles` mirrors the same list each
+// page is protected with in AppRoutes.jsx, so the sidebar never shows a
+// link the user isn't actually allowed to open.
 const navItems = [
-  { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, end: true },
-  { to: "/products", label: "Products", icon: Package },
-  { to: "/categories", label: "Categories", icon: Tags },
-  { to: "/suppliers", label: "Suppliers", icon: Truck },
-  { to: "/customers", label: "Customers", icon: Users },
-  { to: "/purchases", label: "Purchases", icon: ShoppingCart },
-  { to: "/sales", label: "Sales", icon: Receipt },
-  { to: "/stock", label: "Stock", icon: Boxes },
-  { to: "/reports", label: "Reports", icon: BarChart3 },
-  { to: "/shop-settings", label: "Shop Settings", icon: Settings },
+  { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, end: true, allowedRoles: ["owner"] },
+  { to: "/products", label: "Products", icon: Package, allowedRoles: ["owner", "staff"] },
+  { to: "/categories", label: "Categories", icon: Tags, allowedRoles: ["owner"] },
+  { to: "/suppliers", label: "Suppliers", icon: Truck, allowedRoles: ["owner"] },
+  { to: "/customers", label: "Customers", icon: Users, allowedRoles: ["owner"] },
+  { to: "/purchases", label: "Purchases", icon: ShoppingCart, allowedRoles: ["owner"] },
+  { to: "/sales", label: "Sales", icon: Receipt, allowedRoles: ["owner", "staff"] },
+  { to: "/stock", label: "Stock", icon: Boxes, allowedRoles: ["owner"] },
+  { to: "/reports", label: "Reports", icon: BarChart3, allowedRoles: ["owner"] },
+  { to: "/shop-settings", label: "Shop Settings", icon: Settings, allowedRoles: ["owner"] },
 ];
 
 const linkClasses = ({ isActive }) =>
@@ -38,6 +40,13 @@ const linkClasses = ({ isActive }) =>
   ].join(" ");
 
 export default function Sidebar({ isOpen, onClose }) {
+  // Read the logged-in user's role once per render, then only show nav
+  // items that role is allowed to open — same source of truth (localStorage
+  // "user") that ProtectedRoute reads for the actual page-level check.
+  const savedUser = JSON.parse(localStorage.getItem("user") || "null");
+  const role = savedUser?.role;
+  const visibleNavItems = navItems.filter((item) => item.allowedRoles.includes(role));
+
   return (
     <>
       {/* Mobile overlay — click to close the drawer */}
@@ -75,7 +84,7 @@ export default function Sidebar({ isOpen, onClose }) {
         </div>
 
         <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-2">
-          {navItems.map(({ to, label, icon: Icon, end }) => (
+          {visibleNavItems.map(({ to, label, icon: Icon, end }) => (
             <NavLink key={to} to={to} end={end} className={linkClasses} onClick={onClose}>
               <Icon size={18} strokeWidth={2} />
               {label}

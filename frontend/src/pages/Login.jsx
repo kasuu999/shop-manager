@@ -30,7 +30,14 @@ export default function Login() {
       // "Owner"/"Staff" in the header and for role-based UI decisions.
       localStorage.setItem("user", JSON.stringify(user));
 
-      navigate("/dashboard");
+      // Redirect based on role: owner sees the full dashboard, staff goes
+      // straight to Sales since that (along with Products) is all they
+      // have access to.
+      if (user?.role === "owner") {
+        navigate("/dashboard");
+      } else {
+        navigate("/sales");
+      }
     } catch (err) {
       // Backend sends { success: false, message: "..." } on failure
       const message = err.response?.data?.message || "Something went wrong. Please try again.";
