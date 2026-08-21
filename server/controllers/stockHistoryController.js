@@ -22,8 +22,8 @@ export const getStockHistory = async (req, res) => {
     }
 
     if (type) {
-      if (!["PURCHASE", "SALE"].includes(type)) {
-        return res.status(400).json({ success: false, message: "type must be PURCHASE or SALE" });
+      if (!["PURCHASE", "SALE", "SALE_RETURN"].includes(type)) {
+        return res.status(400).json({ success: false, message: "type must be PURCHASE, SALE or SALE_RETURN" });
       }
       filter.type = type;
     }
@@ -76,8 +76,8 @@ export const getStockHistoryByProduct = async (req, res) => {
     const filter = { product: productId };
 
     if (type) {
-      if (!["PURCHASE", "SALE"].includes(type)) {
-        return res.status(400).json({ success: false, message: "type must be PURCHASE or SALE" });
+      if (!["PURCHASE", "SALE", "SALE_RETURN"].includes(type)) {
+        return res.status(400).json({ success: false, message: "type must be PURCHASE, SALE or SALE_RETURN" });
       }
       filter.type = type;
     }

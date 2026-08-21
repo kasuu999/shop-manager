@@ -11,6 +11,7 @@ import {
   createSale,
   getSales,
   getSaleById,
+  cancelSale,
   deleteSale,
 } from "../controllers/saleController.js";
 import { protect } from "../middlewares/userMiddlware.js";
@@ -27,5 +28,9 @@ router.route("/")
 router.route("/:id")
   .get(authorize("owner", "staff"), getSaleById)
   .delete(authorize("owner"), deleteSale); // deleting sales restricted to owner
+
+// Cancelling a sale reverses stock/financial records, same sensitivity as
+// deleting one, so it's restricted to owner as well.
+router.patch("/:id/cancel", authorize("owner"), cancelSale);
 
 export default router;

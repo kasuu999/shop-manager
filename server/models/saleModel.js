@@ -67,6 +67,15 @@ const saleSchema = new mongoose.Schema(
       type: Date,
       default: Date.now,
     },
+    status: {
+      type: String,
+      enum: ["completed", "cancelled"],
+      default: "completed", // flips to "cancelled" via the sale return/cancellation flow
+    },
+    cancelledAt: {
+      type: Date,
+      default: null,
+    },
   },
   { timestamps: true }
 );

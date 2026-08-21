@@ -259,14 +259,123 @@ export const getSaleById = async (req, res) => {
   }
 };
 
+// @desc    Cancel a sale (sale return) — restores stock for every item and
+//          marks the sale as "cancelled". The sale record itself is kept
+//          (not deleted) so invoice/history/audit trail is preserved.
+// @route   PATCH /api/sale/:id/cancel
+// @access  Private (owner only — same sensitivity as deleting a sale)
+//
+// SALE CANCELLATION LOGIC (explained):
+// Cancelling a completed sale means the sold stock is coming BACK into the
+// shop, so for every item on the sale, the matching product's `stock` field
+// must go UP by the same `quantity` that was deducted when the sale was
+// created.
+//
+// A sale can only be cancelled once — if `status` is already "cancelled",
+// the request is rejected instead of double-restoring stock.
+//
+// For EVERY stock restoration we create a StockHistory record (type
+// "SALE_RETURN"), logging previousStock -> newStock and linking back to this
+// sale, mirroring exactly how createSale logs a "SALE" entry when stock goes
+// down. This keeps stock history a complete, consistent audit trail.
+//
+// Just like createSale, "restore stock" + "log stock history" + "flip sale
+// status" are wrapped in ONE MongoDB transaction, so it's all-or-nothing.
+export const cancelSale = async (req, res) => {
+  const session = await mongoose.startSession();
+
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid sale id" });
+    }
+
+    const sale = await Sale.findById(id);
+
+    if (!sale) {
+      return res.status(404).json({ success: false, message: "Sale not found" });
+    }
+
+    if (sale.status === "cancelled") {
+      return res.status(400).json({ success: false, message: "This sale has already been cancelled" });
+    }
+
+    // Validate every product on the sale still exists before touching stock.
+    const productIds = sale.items.map((item) => item.product);
+    const foundProducts = await Product.find({ _id: { $in: productIds } });
+    const productMap = new Map(foundProducts.map((p) => [String(p._id), p]));
+
+    for (const item of sale.items) {
+      if (!productMap.has(String(item.product))) {
+        return res.status(404).json({
+          success: false,
+          message: "One or more products on this sale no longer exist, cannot restore stock",
+        });
+      }
+    }
+
+    await session.withTransaction(async () => {
+      // Restore stock for every item, and log a StockHistory entry right
+      // after each update so previousStock/newStock are accurate.
+      for (const item of sale.items) {
+        const productBefore = productMap.get(String(item.product));
+        const previousStock = productBefore.stock;
+        const newStock = previousStock + item.quantity;
+
+        await Product.findByIdAndUpdate(
+          item.product,
+          { $inc: { stock: item.quantity } }, // $inc with a positive number adds stock back
+          { session }
+        );
+
+        await StockHistory.create(
+          [
+            {
+              product: item.product,
+              type: "SALE_RETURN",
+              quantity: item.quantity,
+              previousStock,
+              newStock,
+              referenceId: sale._id,
+              referenceModel: "Sale",
+            },
+          ],
+          { session }
+        );
+
+        // Keep productMap in sync in case the same product appears in
+        // multiple items on this sale.
+        productBefore.stock = newStock;
+      }
+
+      sale.status = "cancelled";
+      sale.cancelledAt = new Date();
+      await sale.save({ session });
+    });
+
+    // Fetch again, populated, for a useful response (same shape as other endpoints).
+    const populatedSale = await Sale.findById(sale._id)
+      .populate("customer", "name phone")
+      .populate("items.product", "name unit");
+
+    return res.status(200).json({ success: true, message: "Sale cancelled and stock restored successfully", data: populatedSale });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: "Failed to cancel sale", error: error.message });
+  } finally {
+    session.endSession();
+  }
+};
+
 // @desc    Delete a sale record
 // @route   DELETE /api/sales/:id
 // @access  Private
 //
 // NOTE: Just like Purchase delete, this only removes the sale record. It
 // does NOT restore the deducted stock and does NOT delete the related
-// StockHistory records — reversing stock/history safely belongs to a future
-// "sale return/cancellation" feature, not this basic module.
+// StockHistory records. Prefer `cancelSale` above for reversing a sale —
+// it keeps the record and audit trail intact. This raw delete is left as-is
+// for existing callers/behavior.
 export const deleteSale = async (req, res) => {
   try {
     const { id } = req.params;

@@ -1,5 +1,17 @@
 import { useEffect, useState } from "react";
-import { Plus, Search, Trash2, ShoppingCart, RefreshCw, X } from "lucide-react";
+import {
+  Plus,
+  Search,
+  Trash2,
+  ShoppingCart,
+  RefreshCw,
+  X,
+  Eye,
+  RotateCcw,
+  CheckCircle2,
+  AlertTriangle,
+  Ban,
+} from "lucide-react";
 import api from "../api/axiosInstance.js";
 import Modal from "../components/Modal.jsx";
 
@@ -18,6 +30,14 @@ export default function Purchases() {
   ]);
   const [formLoading, setFormLoading] = useState(false);
   const [formError, setFormError] = useState("");
+
+  // Purchase Details / Return State
+  const [viewPurchase, setViewPurchase] = useState(null);
+  const [returnTarget, setReturnTarget] = useState(null);
+  const [returnQuantities, setReturnQuantities] = useState({});
+  const [returnLoading, setReturnLoading] = useState(false);
+  const [returnError, setReturnError] = useState("");
+  const [toast, setToast] = useState("");
 
   const fetchData = async () => {
     setLoading(true);
@@ -133,6 +153,74 @@ export default function Purchases() {
     }
   };
 
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(""), 3500);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
+  // Per-item "remaining returnable" = purchased quantity - already returned
+  const remainingReturnable = (item) => item.quantity - (item.returnedQuantity || 0);
+
+  const handleOpenReturn = (purchase) => {
+    setReturnError("");
+    // Pre-fill every returnable item's input with an empty value (0 quantity == "not returning this item").
+    const initialQuantities = {};
+    purchase.items.forEach((item) => {
+      initialQuantities[item.product._id || item.product] = "";
+    });
+    setReturnQuantities(initialQuantities);
+    setReturnTarget(purchase);
+  };
+
+  const handleReturnQuantityChange = (productId, value, max) => {
+    // Clamp to [0, remaining returnable] as the user types, mirroring the
+    // existing POS quantity-input pattern in Sales.jsx.
+    let qty = value === "" ? "" : Math.max(0, Number(value) || 0);
+    if (qty !== "" && qty > max) qty = max;
+    setReturnQuantities((prev) => ({ ...prev, [productId]: qty }));
+  };
+
+  const handleConfirmReturn = async () => {
+    if (!returnTarget) return;
+    setReturnError("");
+
+    const items = returnTarget.items
+      .map((item) => {
+        const productId = item.product._id || item.product;
+        const qty = Number(returnQuantities[productId]) || 0;
+        return { product: productId, quantity: qty };
+      })
+      .filter((item) => item.quantity > 0);
+
+    if (items.length === 0) {
+      setReturnError("Enter a return quantity for at least one item.");
+      return;
+    }
+
+    setReturnLoading(true);
+    try {
+      const res = await api.post(`/purchase/${returnTarget._id}/return`, { items });
+      const updatedPurchase = res.data?.data;
+
+      setPurchases((prev) =>
+        prev.map((p) => (p._id === returnTarget._id ? { ...p, ...updatedPurchase } : p))
+      );
+      setViewPurchase((prev) => (prev && prev._id === returnTarget._id ? { ...prev, ...updatedPurchase } : prev));
+
+      setToast(res.data?.message || "Purchase return processed — stock updated.");
+      setReturnTarget(null);
+
+      // Refresh in the background so product stock numbers shown elsewhere
+      // (e.g. the New Purchase product list) stay accurate.
+      fetchData();
+    } catch (err) {
+      setReturnError(err.response?.data?.message || "Failed to process purchase return");
+    } finally {
+      setReturnLoading(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Header & Actions */}
@@ -172,6 +260,7 @@ export default function Purchases() {
                   <th className="px-6 py-3.5">Items</th>
                   <th className="px-6 py-3.5">Total Cost</th>
                   <th className="px-6 py-3.5">Date</th>
+                  <th className="px-6 py-3.5">Return Status</th>
                   <th className="px-6 py-3.5 text-right">Actions</th>
                 </tr>
               </thead>
@@ -193,13 +282,47 @@ export default function Purchases() {
                     <td className="px-6 py-4 text-slate-500 text-xs">
                       {new Date(pur.purchaseDate || pur.createdAt).toLocaleDateString()}
                     </td>
+                    <td className="px-6 py-4">
+                      {pur.returnStatus === "full" ? (
+                        <span className="inline-flex items-center gap-1 rounded-md bg-red-50 px-2 py-1 text-xs font-semibold text-red-600 uppercase">
+                          <Ban size={12} /> Fully Returned
+                        </span>
+                      ) : pur.returnStatus === "partial" ? (
+                        <span className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-600 uppercase">
+                          <RotateCcw size={12} /> Partially Returned
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700 uppercase">
+                          <CheckCircle2 size={12} /> None
+                        </span>
+                      )}
+                    </td>
                     <td className="px-6 py-4 text-right">
-                      <button
-                        onClick={() => handleDelete(pur._id)}
-                        className="rounded-md p-1.5 text-slate-500 hover:bg-red-50 hover:text-red-600"
-                      >
-                        <Trash2 size={16} />
-                      </button>
+                      <div className="flex items-center justify-end gap-1">
+                        <button
+                          onClick={() => setViewPurchase(pur)}
+                          className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                          title="View purchase details"
+                        >
+                          <Eye size={16} />
+                        </button>
+                        {pur.returnStatus !== "full" && (
+                          <button
+                            onClick={() => handleOpenReturn(pur)}
+                            className="rounded-md p-1.5 text-slate-500 hover:bg-amber-50 hover:text-amber-600"
+                            title="Return items / decrease stock"
+                          >
+                            <RotateCcw size={16} />
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleDelete(pur._id)}
+                          className="rounded-md p-1.5 text-slate-500 hover:bg-red-50 hover:text-red-600"
+                          title="Delete purchase record"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -327,6 +450,170 @@ export default function Purchases() {
           </div>
         </form>
       </Modal>
+
+      {/* Purchase Details Modal */}
+      <Modal
+        isOpen={!!viewPurchase}
+        onClose={() => setViewPurchase(null)}
+        title={viewPurchase ? `Purchase ${viewPurchase.invoiceNumber || `PUR-${viewPurchase._id.slice(-6)}`}` : "Purchase Details"}
+        maxWidth="max-w-2xl"
+      >
+        {viewPurchase && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              {viewPurchase.returnStatus === "full" ? (
+                <span className="inline-flex items-center gap-1 rounded-md bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-600 uppercase">
+                  <Ban size={12} /> Fully Returned
+                </span>
+              ) : viewPurchase.returnStatus === "partial" ? (
+                <span className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-600 uppercase">
+                  <RotateCcw size={12} /> Partially Returned
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 uppercase">
+                  <CheckCircle2 size={12} /> No Returns
+                </span>
+              )}
+              <span className="text-xs text-slate-500">
+                {new Date(viewPurchase.purchaseDate || viewPurchase.createdAt).toLocaleString()}
+              </span>
+            </div>
+
+            <div>
+              <p className="text-xs text-slate-400">Supplier</p>
+              <p className="font-medium text-ink-900">{viewPurchase.supplier?.name || "Unknown"}</p>
+            </div>
+
+            <div className="rounded-lg border border-slate-200">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-50 text-xs font-semibold text-slate-500 uppercase">
+                  <tr>
+                    <th className="px-3 py-2">Item</th>
+                    <th className="px-3 py-2 text-right">Purchased</th>
+                    <th className="px-3 py-2 text-right">Returned</th>
+                    <th className="px-3 py-2 text-right">Remaining</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {viewPurchase.items?.map((item, idx) => (
+                    <tr key={idx}>
+                      <td className="px-3 py-2">{item.product?.name || "Item"}</td>
+                      <td className="px-3 py-2 text-right">{item.quantity}</td>
+                      <td className="px-3 py-2 text-right">{item.returnedQuantity || 0}</td>
+                      <td className="px-3 py-2 text-right font-medium">{remainingReturnable(item)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex justify-between border-t border-slate-200 pt-3 text-base font-bold text-ink-900">
+              <span>Total Purchase Cost</span>
+              <span>₹{Number(viewPurchase.subtotal || 0).toLocaleString("en-IN")}</span>
+            </div>
+
+            {viewPurchase.returnStatus !== "full" && (
+              <button
+                onClick={() => {
+                  setViewPurchase(null);
+                  handleOpenReturn(viewPurchase);
+                }}
+                className="flex w-full items-center justify-center gap-2 rounded-lg border border-amber-300 bg-amber-50 py-2.5 text-sm font-semibold text-amber-700 hover:bg-amber-100 transition-colors"
+              >
+                <RotateCcw size={16} /> Return Items
+              </button>
+            )}
+          </div>
+        )}
+      </Modal>
+
+      {/* Purchase Return Modal */}
+      <Modal
+        isOpen={!!returnTarget}
+        onClose={() => (returnLoading ? null : setReturnTarget(null))}
+        title="Return Purchase Items"
+        maxWidth="max-w-xl"
+      >
+        {returnTarget && (
+          <div className="space-y-4">
+            <div className="flex items-start gap-3 rounded-lg bg-amber-50 p-3">
+              <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-500" />
+              <p className="text-sm text-amber-800">
+                Enter the quantity being returned for each product. Stock will decrease by the
+                returned amount. This action cannot be undone.
+              </p>
+            </div>
+
+            {returnError && (
+              <div className="rounded-lg bg-red-50 p-2.5 text-xs text-red-600">{returnError}</div>
+            )}
+
+            <div className="space-y-2">
+              {returnTarget.items.map((item) => {
+                const productId = item.product._id || item.product;
+                const max = remainingReturnable(item);
+                const fullyReturned = max <= 0;
+                return (
+                  <div
+                    key={productId}
+                    className={`flex items-center justify-between rounded-lg border p-3 text-sm ${
+                      fullyReturned ? "border-slate-100 bg-slate-50/60 opacity-60" : "border-slate-200 bg-white"
+                    }`}
+                  >
+                    <div>
+                      <p className="font-semibold text-slate-800">{item.product?.name || "Item"}</p>
+                      <p className="text-xs text-slate-500">
+                        Purchased: {item.quantity} &middot; Already Returned: {item.returnedQuantity || 0} &middot;{" "}
+                        <span className="font-medium text-slate-700">Remaining Returnable: {max}</span>
+                      </p>
+                    </div>
+                    <div className="w-24">
+                      <input
+                        type="number"
+                        min="0"
+                        max={max}
+                        disabled={fullyReturned}
+                        placeholder="0"
+                        value={returnQuantities[productId] ?? ""}
+                        onChange={(e) => handleReturnQuantityChange(productId, e.target.value, max)}
+                        className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-center text-xs bg-white focus:outline-none disabled:bg-slate-100"
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 border-t border-slate-200 pt-3">
+              <button
+                type="button"
+                disabled={returnLoading}
+                onClick={() => setReturnTarget(null)}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={returnLoading}
+                onClick={handleConfirmReturn}
+                className="flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
+              >
+                {returnLoading && <RefreshCw size={14} className="animate-spin" />}
+                {returnLoading ? "Processing..." : "Confirm Return"}
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Success Toast */}
+      {toast && (
+        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2 rounded-lg bg-ink-900 px-4 py-3 text-sm text-white shadow-lg">
+          <CheckCircle2 size={16} className="text-emerald-400" />
+          {toast}
+        </div>
+      )}
     </div>
   );
 }

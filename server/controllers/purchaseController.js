@@ -219,15 +219,197 @@ export const getPurchaseById = async (req, res) => {
   }
 };
 
+// @desc    Return (part or all of) a purchase — decreases product stock for
+//          every returned item and tracks per-item returnedQuantity plus an
+//          overall returnStatus ("none" -> "partial" -> "full"). The
+//          purchase record itself is kept (not deleted) so invoice/history/
+//          audit trail is preserved — same pattern as Sale cancellation.
+// @route   POST /api/purchase/:id/return
+// @body    { items: [{ product, quantity }, ...] }
+// @access  Private (owner only — same restriction as creating/deleting a purchase)
+//
+// PURCHASE RETURN LOGIC (explained):
+// A purchase return means stock we received from the supplier is going BACK
+// OUT of the shop, so for every returned item, the matching product's
+// `stock` field must go DOWN by the returned `quantity`.
+//
+// Unlike Sale cancellation (which reverses a whole sale in one go), a
+// purchase can be returned in MULTIPLE PARTIAL steps across separate
+// requests, so we track a running `returnedQuantity` on each purchase item
+// and only allow returning up to (quantity - returnedQuantity) at a time.
+//
+// For EVERY stock decrease we also create a StockHistory record (type
+// "PURCHASE_RETURN"), logging previousStock -> newStock and linking back to
+// this purchase — mirroring exactly how createPurchase logs "PURCHASE" and
+// cancelSale logs "SALE_RETURN".
+//
+// "decrease stock" + "log stock history" + "update returnedQuantity/status"
+// are wrapped in ONE MongoDB transaction, so it's all-or-nothing — same
+// pattern as createPurchase/createSale/cancelSale.
+export const returnPurchase = async (req, res) => {
+  const session = await mongoose.startSession();
+
+  try {
+    const { id } = req.params;
+    const { items } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid purchase id" });
+    }
+
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ success: false, message: "At least one return item is required" });
+    }
+
+    const purchase = await Purchase.findById(id);
+    if (!purchase) {
+      return res.status(404).json({ success: false, message: "Purchase not found" });
+    }
+
+    // 1. Basic shape validation for every return item
+    for (const item of items) {
+      if (!item.product || !mongoose.Types.ObjectId.isValid(item.product)) {
+        return res.status(400).json({ success: false, message: "Each return item must have a valid product id" });
+      }
+      if (item.quantity === undefined || item.quantity === null || Number(item.quantity) <= 0) {
+        return res.status(400).json({ success: false, message: "Each return item's quantity must be greater than 0" });
+      }
+    }
+
+    // 2. Reject duplicate product entries within the same return request —
+    // keeps the "already returned" bookkeeping unambiguous per request.
+    const seenProducts = new Set();
+    for (const item of items) {
+      const key = String(item.product);
+      if (seenProducts.has(key)) {
+        return res.status(400).json({
+          success: false,
+          message: "Duplicate product in return request — combine quantities into a single entry per product",
+        });
+      }
+      seenProducts.add(key);
+    }
+
+    // 3. Every returned product must actually be part of this purchase, and
+    // the return quantity must not exceed what's still returnable
+    // (purchased - already returned) for that item.
+    const purchaseItemMap = new Map(purchase.items.map((pi) => [String(pi.product), pi]));
+
+    for (const item of items) {
+      const purchaseItem = purchaseItemMap.get(String(item.product));
+      if (!purchaseItem) {
+        return res.status(400).json({
+          success: false,
+          message: `Product ${item.product} was not part of this purchase`,
+        });
+      }
+
+      const alreadyReturned = purchaseItem.returnedQuantity || 0;
+      const remainingReturnable = purchaseItem.quantity - alreadyReturned;
+      const requestedQty = Number(item.quantity);
+
+      if (requestedQty > remainingReturnable) {
+        return res.status(400).json({
+          success: false,
+          message: `Only ${remainingReturnable} quantity can be returned (purchased: ${purchaseItem.quantity}, already returned: ${alreadyReturned})`,
+        });
+      }
+    }
+
+    // 4. Validate every product still exists AND has enough current stock to
+    // give back — stock must never go negative.
+    const productIds = items.map((item) => item.product);
+    const foundProducts = await Product.find({ _id: { $in: productIds } });
+
+    if (foundProducts.length !== new Set(productIds.map(String)).size) {
+      return res.status(404).json({ success: false, message: "One or more products not found" });
+    }
+
+    const productMap = new Map(foundProducts.map((p) => [String(p._id), p]));
+
+    for (const item of items) {
+      const product = productMap.get(String(item.product));
+      const requestedQty = Number(item.quantity);
+      if (product.stock < requestedQty) {
+        return res.status(400).json({
+          success: false,
+          message: `Insufficient stock to return "${product.name}". Available: ${product.stock}, attempting to return: ${requestedQty}`,
+        });
+      }
+    }
+
+    // 5. Run stock decrease + stock history + returnedQuantity/status update inside a transaction
+    await session.withTransaction(async () => {
+      for (const item of items) {
+        const requestedQty = Number(item.quantity);
+        const product = productMap.get(String(item.product));
+        const previousStock = product.stock;
+        const newStock = previousStock - requestedQty;
+
+        await Product.findByIdAndUpdate(
+          item.product,
+          { $inc: { stock: -requestedQty } }, // $inc with a negative number subtracts
+          { session }
+        );
+
+        await StockHistory.create(
+          [
+            {
+              product: item.product,
+              type: "PURCHASE_RETURN",
+              quantity: requestedQty,
+              previousStock,
+              newStock,
+              referenceId: purchase._id,
+              referenceModel: "Purchase",
+            },
+          ],
+          { session }
+        );
+
+        // Keep the in-memory product stock in sync (defensive, in case a
+        // future change allows the same product to appear more than once).
+        product.stock = newStock;
+
+        // Update this item's running returnedQuantity on the purchase doc.
+        const purchaseItem = purchaseItemMap.get(String(item.product));
+        purchaseItem.returnedQuantity = (purchaseItem.returnedQuantity || 0) + requestedQty;
+      }
+
+      // Recompute the overall returnStatus from every item's state.
+      const allFullyReturned = purchase.items.every((pi) => pi.returnedQuantity >= pi.quantity);
+      const anyReturned = purchase.items.some((pi) => pi.returnedQuantity > 0);
+      purchase.returnStatus = allFullyReturned ? "full" : anyReturned ? "partial" : "none";
+
+      await purchase.save({ session });
+    });
+
+    // 6. Fetch again, populated, for a useful response (same shape as other endpoints)
+    const populatedPurchase = await Purchase.findById(purchase._id)
+      .populate("supplier", "name phone")
+      .populate("items.product", "name unit sellingPrice");
+
+    return res.status(200).json({
+      success: true,
+      message: purchase.returnStatus === "full" ? "Purchase fully returned and stock updated" : "Purchase return processed and stock updated",
+      data: populatedPurchase,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: "Failed to process purchase return", error: error.message });
+  } finally {
+    session.endSession();
+  }
+};
+
 // @desc    Delete a purchase record
 // @route   DELETE /api/purchases/:id
 // @access  Private
 //
 // NOTE: This only deletes the purchase record itself. It does NOT reverse
 // the stock that was added when the purchase was created, and it does NOT
-// delete the related StockHistory records either — reversing stock/history
-// safely is part of a future "purchase editing/reversal" feature, not this
-// basic module.
+// delete the related StockHistory records either. Prefer `returnPurchase`
+// above for reversing stock on a purchase — it keeps the record and audit
+// trail intact. This raw delete is left as-is for existing callers/behavior.
 export const deletePurchase = async (req, res) => {
   try {
     const { id } = req.params;

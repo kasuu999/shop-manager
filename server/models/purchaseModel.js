@@ -21,6 +21,11 @@ const purchaseItemSchema = new mongoose.Schema(
       type: Number,
       required: true, // quantity * purchasePrice, calculated in the controller
     },
+    returnedQuantity: {
+      type: Number,
+      default: 0,
+      min: [0, "Returned quantity cannot be negative"], // running total returned so far for this item
+    },
   },
   { _id: false }
 );
@@ -52,6 +57,11 @@ const purchaseSchema = new mongoose.Schema(
       type: String,
       trim: true,
       default: "",
+    },
+    returnStatus: {
+      type: String,
+      enum: ["none", "partial", "full"],
+      default: "none", // "partial" once any item has returnedQuantity > 0, "full" once every item is fully returned
     },
   },
   { timestamps: true }

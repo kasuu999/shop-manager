@@ -1,5 +1,19 @@
 import { useEffect, useState } from "react";
-import { Plus, Search, Trash2, Receipt, RefreshCw, X, CreditCard, ShoppingCart } from "lucide-react";
+import {
+  Plus,
+  Search,
+  Trash2,
+  Receipt,
+  RefreshCw,
+  X,
+  CreditCard,
+  ShoppingCart,
+  Eye,
+  RotateCcw,
+  CheckCircle2,
+  AlertTriangle,
+  Ban,
+} from "lucide-react";
 import api from "../api/axiosInstance.js";
 import Modal from "../components/Modal.jsx";
 
@@ -21,6 +35,13 @@ export default function Sales() {
 
   // Product Search inside POS
   const [productQuery, setProductQuery] = useState("");
+
+  // Sale Details / Cancel (Sale Return) State
+  const [viewSale, setViewSale] = useState(null);
+  const [cancelTarget, setCancelTarget] = useState(null);
+  const [cancelLoading, setCancelLoading] = useState(false);
+  const [cancelError, setCancelError] = useState("");
+  const [toast, setToast] = useState("");
 
   const fetchData = async () => {
     setLoading(true);
@@ -156,6 +177,40 @@ export default function Sales() {
     }
   };
 
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(""), 3500);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
+  const handleConfirmCancelSale = async () => {
+    if (!cancelTarget) return;
+    setCancelLoading(true);
+    setCancelError("");
+    try {
+      const res = await api.patch(`/sale/${cancelTarget._id}/cancel`);
+      const updatedSale = res.data?.data;
+
+      // Reflect the cancellation immediately in the list (and in the
+      // details modal if it happens to be open for the same sale).
+      setSales((prev) =>
+        prev.map((s) => (s._id === cancelTarget._id ? { ...s, ...updatedSale } : s))
+      );
+      setViewSale((prev) => (prev && prev._id === cancelTarget._id ? { ...prev, ...updatedSale } : prev));
+
+      setToast(`Sale ${cancelTarget.invoiceNumber || ""} cancelled — stock restored.`);
+      setCancelTarget(null);
+
+      // Refresh in the background so product stock numbers shown elsewhere
+      // (e.g. the POS product list) stay accurate.
+      fetchData();
+    } catch (err) {
+      setCancelError(err.response?.data?.message || "Failed to cancel sale");
+    } finally {
+      setCancelLoading(false);
+    }
+  };
+
   const filteredProducts = products.filter(
     (p) =>
       p.name.toLowerCase().includes(productQuery.toLowerCase()) ||
@@ -202,6 +257,7 @@ export default function Sales() {
                   <th className="px-6 py-3.5">Payment</th>
                   <th className="px-6 py-3.5">Grand Total</th>
                   <th className="px-6 py-3.5">Date</th>
+                  <th className="px-6 py-3.5">Status</th>
                   <th className="px-6 py-3.5 text-right">Actions</th>
                 </tr>
               </thead>
@@ -228,13 +284,46 @@ export default function Sales() {
                     <td className="px-6 py-4 text-slate-500 text-xs">
                       {new Date(sale.saleDate || sale.createdAt).toLocaleDateString()}
                     </td>
+                    <td className="px-6 py-4">
+                      {sale.status === "cancelled" ? (
+                        <span className="inline-flex items-center gap-1 rounded-md bg-red-50 px-2 py-1 text-xs font-semibold text-red-600 uppercase">
+                          <Ban size={12} /> Cancelled
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700 uppercase">
+                          <CheckCircle2 size={12} /> Completed
+                        </span>
+                      )}
+                    </td>
                     <td className="px-6 py-4 text-right">
-                      <button
-                        onClick={() => handleDelete(sale._id)}
-                        className="rounded-md p-1.5 text-slate-500 hover:bg-red-50 hover:text-red-600"
-                      >
-                        <Trash2 size={16} />
-                      </button>
+                      <div className="flex items-center justify-end gap-1">
+                        <button
+                          onClick={() => setViewSale(sale)}
+                          className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                          title="View sale details"
+                        >
+                          <Eye size={16} />
+                        </button>
+                        {sale.status !== "cancelled" && (
+                          <button
+                            onClick={() => {
+                              setCancelError("");
+                              setCancelTarget(sale);
+                            }}
+                            className="rounded-md p-1.5 text-slate-500 hover:bg-amber-50 hover:text-amber-600"
+                            title="Cancel sale / return stock"
+                          >
+                            <RotateCcw size={16} />
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleDelete(sale._id)}
+                          className="rounded-md p-1.5 text-slate-500 hover:bg-red-50 hover:text-red-600"
+                          title="Delete sale record"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -423,6 +512,153 @@ export default function Sales() {
           </div>
         </form>
       </Modal>
+
+      {/* Sale Details Modal */}
+      <Modal
+        isOpen={!!viewSale}
+        onClose={() => setViewSale(null)}
+        title={viewSale ? `Sale ${viewSale.invoiceNumber || ""}` : "Sale Details"}
+        maxWidth="max-w-xl"
+      >
+        {viewSale && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              {viewSale.status === "cancelled" ? (
+                <span className="inline-flex items-center gap-1 rounded-md bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-600 uppercase">
+                  <Ban size={12} /> Cancelled
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 uppercase">
+                  <CheckCircle2 size={12} /> Completed
+                </span>
+              )}
+              <span className="text-xs text-slate-500">
+                {new Date(viewSale.saleDate || viewSale.createdAt).toLocaleString()}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div>
+                <p className="text-xs text-slate-400">Customer</p>
+                <p className="font-medium text-ink-900">{viewSale.customer?.name || "Walk-in Customer"}</p>
+              </div>
+              <div>
+                <p className="text-xs text-slate-400">Payment Method</p>
+                <p className="font-medium text-ink-900 uppercase">{viewSale.paymentMethod || "cash"}</p>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-slate-200">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-50 text-xs font-semibold text-slate-500 uppercase">
+                  <tr>
+                    <th className="px-3 py-2">Item</th>
+                    <th className="px-3 py-2 text-right">Qty</th>
+                    <th className="px-3 py-2 text-right">Price</th>
+                    <th className="px-3 py-2 text-right">Total</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {viewSale.items?.map((item, idx) => (
+                    <tr key={idx}>
+                      <td className="px-3 py-2">{item.product?.name || "Item"}</td>
+                      <td className="px-3 py-2 text-right">{item.quantity}</td>
+                      <td className="px-3 py-2 text-right">₹{item.sellingPrice}</td>
+                      <td className="px-3 py-2 text-right font-medium">₹{item.total}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="space-y-1 border-t border-slate-200 pt-3 text-sm">
+              <div className="flex justify-between text-slate-600">
+                <span>Subtotal</span>
+                <span>₹{Number(viewSale.subtotal || 0).toLocaleString("en-IN")}</span>
+              </div>
+              <div className="flex justify-between text-slate-600">
+                <span>Discount</span>
+                <span>₹{Number(viewSale.discount || 0).toLocaleString("en-IN")}</span>
+              </div>
+              <div className="flex justify-between text-base font-bold text-ink-900">
+                <span>Grand Total</span>
+                <span>₹{Number(viewSale.grandTotal || 0).toLocaleString("en-IN")}</span>
+              </div>
+            </div>
+
+            {viewSale.status === "cancelled" && viewSale.cancelledAt && (
+              <p className="text-xs text-red-500">
+                Cancelled on {new Date(viewSale.cancelledAt).toLocaleString()} — stock was restored.
+              </p>
+            )}
+
+            {viewSale.status !== "cancelled" && (
+              <button
+                onClick={() => {
+                  setCancelError("");
+                  setCancelTarget(viewSale);
+                }}
+                className="flex w-full items-center justify-center gap-2 rounded-lg border border-amber-300 bg-amber-50 py-2.5 text-sm font-semibold text-amber-700 hover:bg-amber-100 transition-colors"
+              >
+                <RotateCcw size={16} /> Cancel Sale / Return Stock
+              </button>
+            )}
+          </div>
+        )}
+      </Modal>
+
+      {/* Cancel Sale Confirmation Modal */}
+      <Modal
+        isOpen={!!cancelTarget}
+        onClose={() => (cancelLoading ? null : setCancelTarget(null))}
+        title="Cancel Sale"
+        maxWidth="max-w-sm"
+      >
+        {cancelTarget && (
+          <div className="space-y-4">
+            <div className="flex items-start gap-3 rounded-lg bg-amber-50 p-3">
+              <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-500" />
+              <p className="text-sm text-amber-800">
+                Are you sure you want to cancel sale{" "}
+                <span className="font-semibold">{cancelTarget.invoiceNumber}</span>? This will restore
+                stock for all items on this sale. This action cannot be undone.
+              </p>
+            </div>
+
+            {cancelError && (
+              <div className="rounded-lg bg-red-50 p-2.5 text-xs text-red-600">{cancelError}</div>
+            )}
+
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                disabled={cancelLoading}
+                onClick={() => setCancelTarget(null)}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Keep Sale
+              </button>
+              <button
+                type="button"
+                disabled={cancelLoading}
+                onClick={handleConfirmCancelSale}
+                className="flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
+              >
+                {cancelLoading && <RefreshCw size={14} className="animate-spin" />}
+                {cancelLoading ? "Cancelling..." : "Yes, Cancel Sale"}
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Success Toast */}
+      {toast && (
+        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2 rounded-lg bg-ink-900 px-4 py-3 text-sm text-white shadow-lg">
+          <CheckCircle2 size={16} className="text-emerald-400" />
+          {toast}
+        </div>
+      )}
     </div>
   );
 }

@@ -11,6 +11,7 @@ import {
   createPurchase,
   getPurchases,
   getPurchaseById,
+  returnPurchase,
   deletePurchase,
 } from "../controllers/purchaseController.js";
 import { protect } from "../middlewares/userMiddlware.js";
@@ -27,5 +28,9 @@ router.route("/")
 router.route("/:id")
   .get(authorize("owner", "staff"), getPurchaseById)
   .delete(authorize("owner"), deletePurchase);
+
+// Purchase return reverses stock/financial records, same restriction as
+// creating/deleting a purchase — owner only.
+router.post("/:id/return", authorize("owner"), returnPurchase);
 
 export default router;
