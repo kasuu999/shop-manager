@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
-import { Plus, Search, Edit2, Trash2, Package, RefreshCw, AlertCircle } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Plus, Search, Edit2, Trash2, Package, RefreshCw, AlertCircle, ScanLine } from "lucide-react";
 import api from "../api/axiosInstance.js";
 import Modal from "../components/Modal.jsx";
+import BarcodeScannerModal from "../components/BarcodeScannerModal.jsx";
 
 export default function Products() {
   const [products, setProducts] = useState([]);
@@ -33,6 +34,14 @@ export default function Products() {
   const [newCategoryName, setNewCategoryName] = useState("");
   const [creatingCategory, setCreatingCategory] = useState(false);
   const [categoryError, setCategoryError] = useState("");
+
+  // Barcode Scanner (mobile camera) — used to either open an EXISTING
+  // product's details for editing, or start a NEW product with the
+  // scanned barcode pre-filled, depending on whether it's found.
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [scanLookupLoading, setScanLookupLoading] = useState(false);
+  const [scanNotice, setScanNotice] = useState("");
+  const scanHandledRef = useRef(false);
 
   const fetchCategories = async () => {
     try {
@@ -73,12 +82,12 @@ export default function Products() {
     fetchProducts();
   }, [search, selectedCategory]);
 
-  const handleOpenAdd = () => {
+  const handleOpenAdd = (prefilledBarcode = "") => {
     setEditingProduct(null);
     setFormData({
       name: "",
       category: categories[0]?._id || "",
-      barcode: "",
+      barcode: prefilledBarcode,
       purchasePrice: "",
       sellingPrice: "",
       unit: "pcs",
@@ -149,7 +158,66 @@ export default function Products() {
     }
   };
 
-  // Creates a category from the small inline form inside the product
+  // Called by BarcodeScannerModal once a barcode is decoded.
+  //
+  // FLOW (matches the requirement): scan -> check if a product with this
+  // barcode already exists -> if YES, show its existing details (opens the
+  // same Edit form, pre-filled, so the person can view/update it) -> if NO,
+  // open a blank "Add Product" form with just the barcode field pre-filled,
+  // ready for manual entry of the rest (name, price, unit, etc — exactly
+  // like reading the details off a physical product packet).
+  //
+  // We use the existing GET /products/barcode/:barcode endpoint (the same
+  // one already built for POS lookups) rather than searching the local
+  // `products` list, because that list can be filtered by the current
+  // search/category filters and might not contain the scanned product even
+  // though it exists.
+  const handleBarcodeScanned = async (code) => {
+    if (scanHandledRef.current) return; // ignore repeat decodes of the same open session
+    scanHandledRef.current = true;
+    setIsScannerOpen(false);
+    setScanLookupLoading(true);
+    setScanNotice("");
+
+    try {
+      const res = await api.get(`/products/barcode/${encodeURIComponent(code)}`);
+      const found = res.data?.data;
+
+      // The barcode endpoint returns a trimmed "billing info" shape
+      // ({ id, name, barcode, sellingPrice, purchasePrice, unit, stock,
+      // category }) rather than the full product document. Normalize it to
+      // the `_id`-based shape the rest of this page (handleOpenEdit) uses.
+      handleOpenEdit({
+        _id: found.id,
+        name: found.name,
+        barcode: found.barcode,
+        sellingPrice: found.sellingPrice,
+        purchasePrice: found.purchasePrice,
+        unit: found.unit,
+        stock: found.stock,
+        category: found.category,
+        lowStockLimit: found.lowStockLimit, // not returned by this endpoint; falls back to "5" below
+      });
+      setScanNotice(`Found existing product: ${found.name}`);
+    } catch (err) {
+      if (err.response?.status === 404) {
+        // No product with this barcode yet — start a fresh "Add Product"
+        // form with the scanned code already filled in.
+        handleOpenAdd(code);
+        setScanNotice(`No product found for barcode "${code}" — enter details for a new product.`);
+      } else {
+        setScanNotice(err.response?.data?.message || "Failed to look up scanned barcode");
+      }
+    } finally {
+      setScanLookupLoading(false);
+    }
+  };
+
+  const handleOpenScanner = () => {
+    scanHandledRef.current = false;
+    setScanNotice("");
+    setIsScannerOpen(true);
+  };
   // modal, then adds it to the `categories` list in state and selects it —
   // so the person never has to leave the "Add Product" flow just to add a
   // category that doesn't exist yet.
@@ -184,13 +252,33 @@ export default function Products() {
           <h2 className="text-2xl font-bold text-ink-900">Products Catalog</h2>
           <p className="text-sm text-slate-500">Manage products, pricing, and stock limits.</p>
         </div>
-        <button
-          onClick={handleOpenAdd}
-          className="flex items-center justify-center gap-2 rounded-lg bg-brand-500 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-600 transition-colors"
-        >
-          <Plus size={16} /> Add Product
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleOpenScanner}
+            disabled={scanLookupLoading}
+            className="flex items-center justify-center gap-2 rounded-lg bg-ink-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-ink-800 transition-colors disabled:opacity-50"
+          >
+            {scanLookupLoading ? (
+              <RefreshCw size={16} className="animate-spin" />
+            ) : (
+              <ScanLine size={16} />
+            )}
+            Scan Product
+          </button>
+          <button
+            onClick={() => handleOpenAdd()}
+            className="flex items-center justify-center gap-2 rounded-lg bg-brand-500 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-600 transition-colors"
+          >
+            <Plus size={16} /> Add Product
+          </button>
+        </div>
       </div>
+
+      {scanNotice && (
+        <div className="rounded-lg bg-slate-100 px-4 py-2.5 text-sm font-medium text-slate-700">
+          {scanNotice}
+        </div>
+      )}
 
       {/* Filters */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -505,6 +593,13 @@ export default function Products() {
           </div>
         </form>
       </Modal>
+
+      {/* Barcode Scanner Modal (mobile camera) */}
+      <BarcodeScannerModal
+        isOpen={isScannerOpen}
+        onClose={() => setIsScannerOpen(false)}
+        onScan={handleBarcodeScanned}
+      />
     </div>
   );
 }

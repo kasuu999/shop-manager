@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Plus,
   Search,
@@ -13,9 +13,11 @@ import {
   CheckCircle2,
   AlertTriangle,
   Ban,
+  ScanLine,
 } from "lucide-react";
 import api from "../api/axiosInstance.js";
 import Modal from "../components/Modal.jsx";
+import BarcodeScannerModal from "../components/BarcodeScannerModal.jsx";
 
 export default function Sales() {
   const [sales, setSales] = useState([]);
@@ -35,6 +37,15 @@ export default function Sales() {
 
   // Product Search inside POS
   const [productQuery, setProductQuery] = useState("");
+
+  // Barcode Scanner (mobile camera)
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [scanNotice, setScanNotice] = useState(""); // brief inline feedback: "Added X" / "Not found: X"
+  // html5-qrcode's success callback can fire several times per second while
+  // the same barcode stays in frame. This ref makes sure exactly ONE scan
+  // per modal-open session gets processed, instead of adding the same
+  // product to the cart repeatedly from one scan.
+  const scanHandledRef = useRef(false);
 
   // Sale Details / Cancel (Sale Return) State
   const [viewSale, setViewSale] = useState(null);
@@ -74,34 +85,69 @@ export default function Sales() {
     setCart([]);
     setFormError("");
     setProductQuery("");
+    setScanNotice("");
     setIsModalOpen(true);
   };
 
-  const handleAddToCart = (product) => {
+  // Core "add or increment" logic, shared by manual click AND barcode scan.
+  // Returns a result object instead of alerting directly, so each caller
+  // (manual click vs. scan) can decide how to show that feedback.
+  const addProductToCart = (product) => {
     if (product.stock <= 0) {
-      alert("Product is out of stock!");
-      return;
+      return { ok: false, message: `${product.name} is out of stock.` };
     }
 
     const existingIndex = cart.findIndex((item) => item.product._id === product._id);
     if (existingIndex > -1) {
-      const updated = [...cart];
-      if (updated[existingIndex].quantity >= product.stock) {
-        alert("Cannot add more than available stock!");
-        return;
+      if (cart[existingIndex].quantity >= product.stock) {
+        return { ok: false, message: `Cannot add more "${product.name}" — only ${product.stock} in stock.` };
       }
+      const updated = [...cart];
       updated[existingIndex].quantity += 1;
       setCart(updated);
-    } else {
-      setCart([
-        ...cart,
-        {
-          product,
-          quantity: 1,
-          sellingPrice: product.sellingPrice || 0,
-        },
-      ]);
+      return { ok: true, message: `${product.name} quantity increased.` };
     }
+
+    setCart((prev) => [
+      ...prev,
+      { product, quantity: 1, sellingPrice: product.sellingPrice || 0 },
+    ]);
+    return { ok: true, message: `${product.name} added to cart.` };
+  };
+
+  const handleAddToCart = (product) => {
+    const result = addProductToCart(product);
+    if (!result.ok) alert(result.message);
+  };
+
+  // Called by BarcodeScannerModal once a barcode is decoded. We match
+  // against the SAME `products` list already loaded for manual search
+  // (products already carry their `barcode` field) — no extra API round
+  // trip needed, and it keeps scan results using the exact same product
+  // objects/stock numbers as the rest of the POS.
+  const handleBarcodeScanned = (code) => {
+    if (scanHandledRef.current) return; // ignore repeat decodes of the same open session
+    scanHandledRef.current = true;
+
+    const matched = products.find((p) => p.barcode && p.barcode === code);
+
+    if (!matched) {
+      setScanNotice(`No product found for barcode "${code}".`);
+    } else {
+      const result = addProductToCart(matched);
+      setScanNotice(result.message);
+    }
+
+    // Close the scanner after handling one scan — cashier taps "Scan
+    // Barcode" again for the next item. Keeps each scan a deliberate,
+    // single action instead of the camera silently re-triggering.
+    setIsScannerOpen(false);
+  };
+
+  const handleOpenScanner = () => {
+    scanHandledRef.current = false;
+    setScanNotice("");
+    setIsScannerOpen(true);
   };
 
   const handleQuantityChange = (product_id, newQty) => {
@@ -182,6 +228,12 @@ export default function Sales() {
     const timer = setTimeout(() => setToast(""), 3500);
     return () => clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    if (!scanNotice) return;
+    const timer = setTimeout(() => setScanNotice(""), 4000);
+    return () => clearTimeout(timer);
+  }, [scanNotice]);
 
   const handleConfirmCancelSale = async () => {
     if (!cancelTarget) return;
@@ -365,16 +417,29 @@ export default function Sales() {
               <label className="mb-1 block text-sm font-medium text-slate-700">
                 Search Products to Add
               </label>
-              <div className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2">
-                <Search size={16} className="text-slate-400" />
-                <input
-                  type="text"
-                  placeholder="Type product name or barcode..."
-                  value={productQuery}
-                  onChange={(e) => setProductQuery(e.target.value)}
-                  className="w-full bg-transparent text-sm focus:outline-none"
-                />
+              <div className="flex items-center gap-2">
+                <div className="flex flex-1 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2">
+                  <Search size={16} className="text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="Type product name or barcode..."
+                    value={productQuery}
+                    onChange={(e) => setProductQuery(e.target.value)}
+                    className="w-full bg-transparent text-sm focus:outline-none"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={handleOpenScanner}
+                  title="Scan barcode with camera"
+                  className="flex shrink-0 items-center gap-1.5 rounded-lg bg-ink-900 px-3 py-2 text-xs font-semibold text-white hover:bg-ink-800 transition-colors"
+                >
+                  <ScanLine size={16} /> Scan
+                </button>
               </div>
+              {scanNotice && (
+                <p className="mt-1.5 text-xs font-medium text-slate-600">{scanNotice}</p>
+              )}
             </div>
 
             {/* Product Grid / Cards */}
@@ -651,6 +716,13 @@ export default function Sales() {
           </div>
         )}
       </Modal>
+
+      {/* Barcode Scanner Modal (mobile camera) */}
+      <BarcodeScannerModal
+        isOpen={isScannerOpen}
+        onClose={() => setIsScannerOpen(false)}
+        onScan={handleBarcodeScanned}
+      />
 
       {/* Success Toast */}
       {toast && (
