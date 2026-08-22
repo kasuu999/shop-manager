@@ -220,6 +220,36 @@ export default function Sales() {
     setIsScannerOpen(true);
   };
 
+  // Global listener for handheld USB/Bluetooth hardware barcode scanners
+  useEffect(() => {
+    let codeBuffer = "";
+    let lastKeyTime = 0;
+
+    const handleKeyDown = (e) => {
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName)) {
+        return;
+      }
+
+      const currentTime = Date.now();
+
+      if (e.key === "Enter") {
+        if (codeBuffer.length >= 3) {
+          handleBarcodeScanned(codeBuffer);
+          codeBuffer = "";
+        }
+      } else if (e.key.length === 1) {
+        if (currentTime - lastKeyTime > 120) {
+          codeBuffer = "";
+        }
+        codeBuffer += e.key;
+        lastKeyTime = currentTime;
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [products, categories]);
+
   const handleQuantityChange = (product_id, newQty) => {
     const qty = Math.max(1, Number(newQty) || 1);
     const updated = cart.map((item) => {

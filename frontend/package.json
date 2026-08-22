@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@ericblade/quagga2": "^1.12.1",
+    "@zxing/library": "^0.21.3",
     "axios": "^1.7.2",
     "html5-qrcode": "^2.3.8",
     "lucide-react": "^0.383.0",

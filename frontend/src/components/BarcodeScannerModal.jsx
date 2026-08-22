@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import { BrowserMultiFormatReader, BarcodeFormat, DecodeHintType } from "@zxing/library";
 import Quagga from "@ericblade/quagga2";
 import { X, Camera, AlertTriangle, Upload, RefreshCw, Keyboard, Check, Zap, ZapOff, CheckCircle2 } from "lucide-react";
 
-const SCANNER_VIEWPORT_ID = "quagga-scanner-viewport";
+const SCANNER_VIEWPORT_ID = "barcode-scanner-viewport-video";
 
 const playBeep = () => {
   try {
@@ -23,7 +24,7 @@ const playBeep = () => {
 
 // Checksum validation for EAN-13 / EAN-8 / UPC barcodes
 const isValidBarcodeChecksum = (code) => {
-  if (!code || !/^\d+$/.test(code)) return true; // Allow non-numeric barcodes like Code128
+  if (!code || !/^\d+$/.test(code)) return true;
   if (code.length === 13) {
     let sum = 0;
     for (let i = 0; i < 12; i++) {
@@ -72,7 +73,8 @@ export default function BarcodeScannerModal({ isOpen, onClose, onScan, autoClose
   const [hasTorch, setHasTorch] = useState(false);
   const fileInputRef = useRef(null);
   const isHandlingScanRef = useRef(false);
-  const videoTrackRef = useRef(null);
+  const codeReaderRef = useRef(null);
+  const videoRef = useRef(null);
 
   useEffect(() => {
     if (!isOpen || activeTab !== "camera") return;
@@ -83,84 +85,32 @@ export default function BarcodeScannerModal({ isOpen, onClose, onScan, autoClose
     setStarting(true);
     isHandlingScanRef.current = false;
 
-    const viewportEl = document.getElementById(SCANNER_VIEWPORT_ID);
-    if (!viewportEl) return;
+    // Configure ZXing hints for retail 1D barcodes & QR
+    const hints = new Map();
+    hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+      BarcodeFormat.EAN_13,
+      BarcodeFormat.EAN_8,
+      BarcodeFormat.UPC_A,
+      BarcodeFormat.UPC_E,
+      BarcodeFormat.CODE_128,
+      BarcodeFormat.CODE_39,
+      BarcodeFormat.ITF,
+      BarcodeFormat.QR_CODE,
+    ]);
+    hints.set(DecodeHintType.TRY_HARDER, true);
 
-    Quagga.init(
-      {
-        inputStream: {
-          name: "Live",
-          type: "LiveStream",
-          target: viewportEl,
-          constraints: {
-            facingMode: "environment",
-            width: { min: 640, ideal: 1280 },
-            height: { min: 480, ideal: 720 },
-          },
-        },
-        locator: {
-          patchSize: "medium",
-          halfSample: true,
-        },
-        numOfWorkers: navigator.hardwareConcurrency ? Math.min(4, navigator.hardwareConcurrency) : 2,
-        decoder: {
-          readers: [
-            "ean_reader",
-            "ean_8_reader",
-            "upc_reader",
-            "upc_e_reader",
-            "code_128_reader",
-            "code_39_reader",
-            "codabar_reader",
-          ],
-          multiple: false,
-        },
-        locate: true,
-      },
-      (err) => {
-        if (cancelled) return;
-        if (err) {
-          console.error("Quagga init error:", err);
-          setStarting(false);
-          setError(
-            "Could not access camera. Please allow camera permissions in browser settings, or upload an image / type barcode manually."
-          );
-          return;
-        }
+    const codeReader = new BrowserMultiFormatReader(hints);
+    codeReaderRef.current = codeReader;
 
-        Quagga.start();
-        setStarting(false);
+    const videoEl = videoRef.current;
+    if (!videoEl) return;
 
-        // Check torch capabilities
-        try {
-          const track = Quagga.CameraAccess.getActiveTrack();
-          videoTrackRef.current = track;
-          if (track && track.getCapabilities && track.getCapabilities().torch) {
-            setHasTorch(true);
-          }
-        } catch (_) {}
-      }
-    );
+    // Helper to process decoded barcode string
+    const handleSuccessfulDecode = (rawText) => {
+      if (cancelled || isHandlingScanRef.current || !rawText) return;
 
-    // Filter and process decoded barcodes from camera feed
-    const handleDetected = (result) => {
-      if (cancelled || isHandlingScanRef.current) return;
-
-      const code = result?.codeResult?.code;
-      if (!code) return;
-
-      const trimmed = code.trim();
-      // Require valid length and checksum for retail 1D barcodes
-      if (trimmed.length < 4 || !isValidBarcodeChecksum(trimmed)) return;
-
-      // Ensure decent confidence score from Quagga
-      if (result.codeResult.decodedCodes) {
-        const errors = result.codeResult.decodedCodes.filter((x) => x.error !== undefined);
-        if (errors.length > 0) {
-          const avgError = errors.reduce((sum, err) => sum + err.error, 0) / errors.length;
-          if (avgError > 0.15) return; // Ignore low-confidence frame decodes
-        }
-      }
+      const trimmed = rawText.trim();
+      if (trimmed.length < 3 || !isValidBarcodeChecksum(trimmed)) return;
 
       isHandlingScanRef.current = true;
       playBeep();
@@ -170,35 +120,92 @@ export default function BarcodeScannerModal({ isOpen, onClose, onScan, autoClose
 
       if (autoCloseOnScan) {
         try {
-          Quagga.stop();
+          codeReader.reset();
         } catch (_) {}
       } else {
-        // Cooldown before next scan in continuous mode
         setTimeout(() => {
           isHandlingScanRef.current = false;
         }, 1500);
       }
     };
 
-    Quagga.onDetected(handleDetected);
+    // Start video stream with facingMode: environment
+    codeReader
+      .decodeFromConstraints(
+        {
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+        },
+        videoEl,
+        (result, err) => {
+          if (cancelled) return;
+          if (result && result.getText()) {
+            handleSuccessfulDecode(result.getText());
+          }
+        }
+      )
+      .then(() => {
+        if (cancelled) return;
+        setStarting(false);
+
+        // Ensure iOS Safari playback works without pausing
+        if (videoEl) {
+          videoEl.setAttribute("playsinline", "true");
+          videoEl.setAttribute("muted", "true");
+          videoEl.play().catch(() => {});
+
+          // Check torch capability
+          try {
+            const stream = videoEl.srcObject;
+            const track = stream?.getVideoTracks?.()?.[0];
+            if (track && track.getCapabilities && track.getCapabilities().torch) {
+              setHasTorch(true);
+            }
+          } catch (_) {}
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setStarting(false);
+        setError(
+          "Could not access camera. Please check camera permissions in your mobile browser, or upload an image / type barcode digits in 'Type Barcode' tab."
+        );
+      });
+
+    // Parallel Native BarcodeDetector loop for lightning-fast hardware detection
+    const nativeTimer = setInterval(async () => {
+      if (cancelled || isHandlingScanRef.current || !videoEl || videoEl.readyState < 2) return;
+      const detected = await detectWithNativeAPI(videoEl);
+      if (detected) {
+        handleSuccessfulDecode(detected);
+      }
+    }, 250);
 
     return () => {
       cancelled = true;
+      clearInterval(nativeTimer);
       try {
-        Quagga.offDetected(handleDetected);
-        Quagga.stop();
+        codeReader.reset();
       } catch (_) {}
     };
   }, [isOpen, activeTab, autoCloseOnScan]);
 
   const toggleTorch = async () => {
-    if (!videoTrackRef.current || !hasTorch) return;
+    const videoEl = videoRef.current;
+    if (!videoEl || !hasTorch) return;
     try {
-      const nextState = !flashOn;
-      await videoTrackRef.current.applyConstraints({
-        advanced: [{ torch: nextState }],
-      });
-      setFlashOn(nextState);
+      const stream = videoEl.srcObject;
+      const track = stream?.getVideoTracks?.()?.[0];
+      if (track) {
+        const nextState = !flashOn;
+        await track.applyConstraints({
+          advanced: [{ torch: nextState }],
+        });
+        setFlashOn(nextState);
+      }
     } catch (_) {}
   };
 
@@ -211,36 +218,37 @@ export default function BarcodeScannerModal({ isOpen, onClose, onScan, autoClose
 
     try {
       const imgUrl = URL.createObjectURL(file);
-
-      // Attempt 1: Native BarcodeDetector API on original image
       const img = new Image();
+
       await new Promise((resolve, reject) => {
         img.onload = resolve;
         img.onerror = reject;
         img.src = imgUrl;
       });
 
+      // Attempt 1: Native BarcodeDetector API
       let detectedCode = await detectWithNativeAPI(img);
 
-      // Attempt 2: Quagga decodeSingle on original image URL
+      // Attempt 2: ZXing decodeFromImageUrl
+      if (!detectedCode && codeReaderRef.current) {
+        try {
+          const zxResult = await codeReaderRef.current.decodeFromImageUrl(imgUrl);
+          if (zxResult && zxResult.getText()) {
+            detectedCode = zxResult.getText().trim();
+          }
+        } catch (_) {}
+      }
+
+      // Attempt 3: Quagga decodeSingle
       if (!detectedCode) {
         const result = await new Promise((resolve) => {
           Quagga.decodeSingle(
             {
               src: imgUrl,
               numOfWorkers: 0,
-              inputStream: {
-                size: 800,
-              },
+              inputStream: { size: 800 },
               decoder: {
-                readers: [
-                  "ean_reader",
-                  "ean_8_reader",
-                  "upc_reader",
-                  "upc_e_reader",
-                  "code_128_reader",
-                  "code_39_reader",
-                ],
+                readers: ["ean_reader", "ean_8_reader", "upc_reader", "upc_e_reader", "code_128_reader"],
               },
               locate: true,
             },
@@ -261,7 +269,7 @@ export default function BarcodeScannerModal({ isOpen, onClose, onScan, autoClose
         onScan(detectedCode);
       } else {
         setFileError(
-          "Could not detect barcode from image. Try using Camera Scanner or type the digits printed below the barcode in 'Type Barcode' tab."
+          "Could not detect barcode from image. Try taking a photo closer under store light or type barcode numbers directly using 'Type Barcode' tab."
         );
       }
     } catch (err) {
@@ -359,13 +367,24 @@ export default function BarcodeScannerModal({ isOpen, onClose, onScan, autoClose
             ) : (
               <>
                 {starting && (
-                  <p className="mb-2 text-center text-xs text-slate-400">Initializing retail camera scanner...</p>
+                  <p className="mb-2 text-center text-xs text-slate-400">Starting retail camera stream...</p>
                 )}
-                {/* Quagga Viewport */}
-                <div
-                  id={SCANNER_VIEWPORT_ID}
-                  className="relative overflow-hidden rounded-lg border border-slate-200 bg-slate-900 min-h-[260px] max-h-[340px] flex items-center justify-center [&>video]:w-full [&>video]:h-full [&>video]:object-cover [&>canvas]:absolute [&>canvas]:top-0 [&>canvas]:left-0 [&>canvas]:w-full [&>canvas]:h-full"
-                />
+                {/* Camera Video Viewport */}
+                <div className="relative overflow-hidden rounded-lg border border-slate-200 bg-slate-900 min-h-[260px] max-h-[340px] flex items-center justify-center">
+                  <video
+                    ref={videoRef}
+                    id={SCANNER_VIEWPORT_ID}
+                    className="w-full h-full object-cover"
+                    playsInline
+                    muted
+                  />
+                  {/* Laser Scan Reticle Overlay */}
+                  <div className="absolute inset-0 pointer-events-none flex items-center justify-center p-6">
+                    <div className="w-full h-32 border-2 border-emerald-400/80 rounded-lg relative flex items-center justify-center">
+                      <div className="w-full h-0.5 bg-emerald-500 shadow-[0_0_8px_#10b981] animate-pulse" />
+                    </div>
+                  </div>
+                </div>
               </>
             )}
 
@@ -386,7 +405,7 @@ export default function BarcodeScannerModal({ isOpen, onClose, onScan, autoClose
 
             <div className="mt-4 flex flex-col gap-2">
               <p className="text-center text-xs text-slate-500">
-                Hold product packet flat in front of camera. Point barcode lines at camera.
+                Hold product packet flat inside box. Point barcode lines at camera.
               </p>
 
               <input
