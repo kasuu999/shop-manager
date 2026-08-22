@@ -22,9 +22,21 @@ const playBeep = () => {
   } catch (_) {}
 };
 
-// Checksum validation for EAN-13 / EAN-8 / UPC barcodes
-const isValidBarcodeChecksum = (code) => {
+// Checksum validation for EAN-13 / EAN-8 / UPC barcodes ONLY.
+// IMPORTANT: this must only run for formats that actually use this checksum
+// scheme (EAN/UPC family). Applying it to any 13 or 8 digit string — e.g. a
+// CODE_128 / ITF / QR code that happens to be numeric — silently rejects a
+// perfectly valid scan with zero feedback, making it look like "scanning
+// doesn't work" even though the camera decoded it correctly.
+const isValidBarcodeChecksum = (code, format) => {
   if (!code || !/^\d+$/.test(code)) return true;
+
+  const isEanUpcFamily = format
+    ? /ean|upc/i.test(format)
+    : code.length === 13 || code.length === 8; // unknown format: best-effort fallback
+
+  if (!isEanUpcFamily) return true;
+
   if (code.length === 13) {
     let sum = 0;
     for (let i = 0; i < 12; i++) {
@@ -44,6 +56,19 @@ const isValidBarcodeChecksum = (code) => {
   return true;
 };
 
+// Map ZXing's numeric BarcodeFormat enum to a lowercase string so it can be
+// compared the same way as the native BarcodeDetector / Quagga format names.
+const ZXING_FORMAT_NAMES = {
+  [BarcodeFormat.EAN_13]: "ean_13",
+  [BarcodeFormat.EAN_8]: "ean_8",
+  [BarcodeFormat.UPC_A]: "upc_a",
+  [BarcodeFormat.UPC_E]: "upc_e",
+  [BarcodeFormat.CODE_128]: "code_128",
+  [BarcodeFormat.CODE_39]: "code_39",
+  [BarcodeFormat.ITF]: "itf",
+  [BarcodeFormat.QR_CODE]: "qr_code",
+};
+
 // Try native browser BarcodeDetector API if available
 const detectWithNativeAPI = async (imageOrCanvas) => {
   if ("BarcodeDetector" in window) {
@@ -54,7 +79,7 @@ const detectWithNativeAPI = async (imageOrCanvas) => {
       });
       const barcodes = await detector.detect(imageOrCanvas);
       if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
-        return barcodes[0].rawValue.trim();
+        return { code: barcodes[0].rawValue.trim(), format: barcodes[0].format };
       }
     } catch (_) {}
   }
@@ -106,11 +131,19 @@ export default function BarcodeScannerModal({ isOpen, onClose, onScan, autoClose
     if (!videoEl) return;
 
     // Helper to process decoded barcode string
-    const handleSuccessfulDecode = (rawText) => {
+    const handleSuccessfulDecode = (rawText, format) => {
       if (cancelled || isHandlingScanRef.current || !rawText) return;
 
       const trimmed = rawText.trim();
-      if (trimmed.length < 3 || !isValidBarcodeChecksum(trimmed)) return;
+      if (trimmed.length < 3) return;
+      if (!isValidBarcodeChecksum(trimmed, format)) {
+        // Decoded fine, but failed the EAN/UPC checksum — likely a
+        // half-read frame. Show a hint instead of failing silently so it
+        // doesn't look like the scanner is doing nothing.
+        setFileError("Detected a code but couldn't verify it — hold the barcode steady and try again.");
+        return;
+      }
+      setFileError("");
 
       isHandlingScanRef.current = true;
       playBeep();
@@ -143,7 +176,7 @@ export default function BarcodeScannerModal({ isOpen, onClose, onScan, autoClose
         (result, err) => {
           if (cancelled) return;
           if (result && result.getText()) {
-            handleSuccessfulDecode(result.getText());
+            handleSuccessfulDecode(result.getText(), ZXING_FORMAT_NAMES[result.getBarcodeFormat()]);
           }
         }
       )
@@ -180,7 +213,7 @@ export default function BarcodeScannerModal({ isOpen, onClose, onScan, autoClose
       if (cancelled || isHandlingScanRef.current || !videoEl || videoEl.readyState < 2) return;
       const detected = await detectWithNativeAPI(videoEl);
       if (detected) {
-        handleSuccessfulDecode(detected);
+        handleSuccessfulDecode(detected.code, detected.format);
       }
     }, 250);
 
@@ -227,7 +260,13 @@ export default function BarcodeScannerModal({ isOpen, onClose, onScan, autoClose
       });
 
       // Attempt 1: Native BarcodeDetector API
-      let detectedCode = await detectWithNativeAPI(img);
+      let detectedCode = null;
+      let detectedFormat = null;
+      const nativeResult = await detectWithNativeAPI(img);
+      if (nativeResult) {
+        detectedCode = nativeResult.code;
+        detectedFormat = nativeResult.format;
+      }
 
       // Attempt 2: ZXing decodeFromImageUrl
       if (!detectedCode && codeReaderRef.current) {
@@ -235,6 +274,7 @@ export default function BarcodeScannerModal({ isOpen, onClose, onScan, autoClose
           const zxResult = await codeReaderRef.current.decodeFromImageUrl(imgUrl);
           if (zxResult && zxResult.getText()) {
             detectedCode = zxResult.getText().trim();
+            detectedFormat = ZXING_FORMAT_NAMES[zxResult.getBarcodeFormat()];
           }
         } catch (_) {}
       }
@@ -258,12 +298,13 @@ export default function BarcodeScannerModal({ isOpen, onClose, onScan, autoClose
 
         if (result?.codeResult?.code) {
           detectedCode = result.codeResult.code.trim();
+          detectedFormat = result.codeResult.format;
         }
       }
 
       URL.revokeObjectURL(imgUrl);
 
-      if (detectedCode && isValidBarcodeChecksum(detectedCode)) {
+      if (detectedCode && isValidBarcodeChecksum(detectedCode, detectedFormat)) {
         playBeep();
         setLastScannedCode(detectedCode);
         onScan(detectedCode);
