@@ -54,19 +54,35 @@ export default function Sales() {
   const [cancelError, setCancelError] = useState("");
   const [toast, setToast] = useState("");
 
+  const [categories, setCategories] = useState([]);
+  const [quickAddModalOpen, setQuickAddModalOpen] = useState(false);
+  const [quickAddData, setQuickAddData] = useState({
+    name: "",
+    category: "",
+    barcode: "",
+    purchasePrice: "",
+    sellingPrice: "",
+    unit: "pcs",
+    stock: "50",
+  });
+  const [quickAddLoading, setQuickAddLoading] = useState(false);
+  const [quickAddError, setQuickAddError] = useState("");
+
   const fetchData = async () => {
     setLoading(true);
     setError("");
     try {
-      const [saleRes, custRes, prodRes] = await Promise.all([
+      const [saleRes, custRes, prodRes, catRes] = await Promise.all([
         api.get("/sale"),
         api.get("/customers"),
         api.get("/products?limit=1000"),
+        api.get("/categories"),
       ]);
 
       if (saleRes.data?.success) setSales(saleRes.data.data);
       if (custRes.data?.success) setCustomers(custRes.data.data);
       if (prodRes.data?.success) setProducts(prodRes.data.data);
+      if (catRes.data?.success) setCategories(catRes.data.data);
     } catch (err) {
       setError(err.response?.data?.message || "Failed to load sales records");
     } finally {
@@ -119,10 +135,6 @@ export default function Sales() {
   };
 
   const handleBarcodeScanned = async (code) => {
-    if (scanHandledRef.current) return;
-    scanHandledRef.current = true;
-    setIsScannerOpen(false);
-
     // Automatically open POS modal if scanning from main Sales page
     setIsModalOpen(true);
 
@@ -150,10 +162,55 @@ export default function Sales() {
     }
 
     if (!matched) {
-      setScanNotice(`No product found for barcode "${trimmedCode}". Please add this product in Products menu first.`);
+      // Barcode not in shop stock yet — open Express Quick Add modal right in POS!
+      setIsScannerOpen(false);
+      setQuickAddData({
+        name: "",
+        category: categories[0]?._id || "",
+        barcode: trimmedCode,
+        purchasePrice: "",
+        sellingPrice: "",
+        unit: "pcs",
+        stock: "50",
+      });
+      setQuickAddError("");
+      setQuickAddModalOpen(true);
     } else {
       const result = addProductToCart(matched);
       setScanNotice(result.message);
+    }
+  };
+
+  const handleQuickAddSubmit = async (e) => {
+    e.preventDefault();
+    setQuickAddError("");
+    setQuickAddLoading(true);
+
+    try {
+      const payload = {
+        ...quickAddData,
+        purchasePrice: Number(quickAddData.purchasePrice) || 0,
+        sellingPrice: Number(quickAddData.sellingPrice) || 0,
+        stock: Number(quickAddData.stock) || 1,
+        lowStockLimit: 5,
+      };
+
+      const res = await api.post("/products", payload);
+      const newProduct = res.data?.data;
+
+      // Add to local state product list & refresh in background
+      setProducts((prev) => [newProduct, ...prev]);
+
+      // Automatically add new product to POS Cart
+      addProductToCart(newProduct);
+
+      setToast(`Product "${newProduct.name}" created and added to bill!`);
+      setQuickAddModalOpen(false);
+      fetchData();
+    } catch (err) {
+      setQuickAddError(err.response?.data?.message || "Failed to create product");
+    } finally {
+      setQuickAddLoading(false);
     }
   };
 
@@ -736,6 +793,112 @@ export default function Sales() {
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* Express Quick Add Product Modal (Triggered on Scanned Unknown Barcode) */}
+      <Modal
+        isOpen={quickAddModalOpen}
+        onClose={() => setQuickAddModalOpen(false)}
+        title="Express Quick Add Product to Shop Stock"
+        maxWidth="max-w-md"
+      >
+        <form onSubmit={handleQuickAddSubmit} className="space-y-3">
+          <div className="rounded-lg bg-amber-50 p-2.5 text-xs text-amber-800 border border-amber-200">
+            Barcode <span className="font-mono font-bold text-amber-900">{quickAddData.barcode}</span> not found in shop stock yet. Enter details to save & add to bill instantly:
+          </div>
+
+          {quickAddError && (
+            <div className="rounded-lg bg-red-50 p-2 text-xs text-red-600">{quickAddError}</div>
+          )}
+
+          <div>
+            <label className="mb-1 block text-xs font-medium text-slate-700">Product Name *</label>
+            <input
+              type="text"
+              required
+              autoFocus
+              value={quickAddData.name}
+              onChange={(e) => setQuickAddData({ ...quickAddData, name: e.target.value })}
+              placeholder="e.g. Pond's 7g / Lays ₹10"
+              className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm focus:border-brand-500 focus:outline-none"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-700">Selling Price (₹) *</label>
+              <input
+                type="number"
+                min="0"
+                step="any"
+                required
+                value={quickAddData.sellingPrice}
+                onChange={(e) => setQuickAddData({ ...quickAddData, sellingPrice: e.target.value })}
+                placeholder="10"
+                className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-bold text-emerald-700 focus:border-brand-500 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-700">Stock Qty</label>
+              <input
+                type="number"
+                min="1"
+                value={quickAddData.stock}
+                onChange={(e) => setQuickAddData({ ...quickAddData, stock: e.target.value })}
+                placeholder="50"
+                className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm focus:border-brand-500 focus:outline-none"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-700">Cost Price (₹)</label>
+              <input
+                type="number"
+                min="0"
+                step="any"
+                value={quickAddData.purchasePrice}
+                onChange={(e) => setQuickAddData({ ...quickAddData, purchasePrice: e.target.value })}
+                placeholder="8"
+                className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm focus:border-brand-500 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-700">Category</label>
+              <select
+                value={quickAddData.category}
+                onChange={(e) => setQuickAddData({ ...quickAddData, category: e.target.value })}
+                className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm focus:border-brand-500 focus:outline-none"
+              >
+                {categories.map((c) => (
+                  <option key={c._id} value={c._id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="mt-4 flex justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={() => setQuickAddModalOpen(false)}
+              className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={quickAddLoading}
+              className="rounded-lg bg-emerald-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+            >
+              {quickAddLoading ? "Saving..." : "Save & Add to Bill"}
+            </button>
+          </div>
+        </form>
       </Modal>
 
       {/* Barcode Scanner Modal (mobile camera) */}

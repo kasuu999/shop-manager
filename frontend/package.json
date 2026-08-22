@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@ericblade/quagga2": "^1.12.1",
     "axios": "^1.7.2",
     "html5-qrcode": "^2.3.8",
     "lucide-react": "^0.383.0",
