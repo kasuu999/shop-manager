@@ -172,6 +172,8 @@ export default function Products() {
   // `products` list, because that list can be filtered by the current
   // search/category filters and might not contain the scanned product even
   // though it exists.
+  const [scannerTarget, setScannerTarget] = useState("catalog"); // "catalog" | "form"
+
   const handleBarcodeScanned = async (code) => {
     if (scanHandledRef.current) return; // ignore repeat decodes of the same open session
     scanHandledRef.current = true;
@@ -179,24 +181,27 @@ export default function Products() {
     setScanLookupLoading(true);
     setScanNotice("");
 
+    if (scannerTarget === "form") {
+      setFormData((prev) => ({ ...prev, barcode: code }));
+      setScanNotice(`Barcode "${code}" set for product.`);
+      setScanLookupLoading(false);
+      return;
+    }
+
     try {
       const res = await api.get(`/products/barcode/${encodeURIComponent(code)}`);
       const found = res.data?.data;
 
-      // The barcode endpoint returns a trimmed "billing info" shape
-      // ({ id, name, barcode, sellingPrice, purchasePrice, unit, stock,
-      // category }) rather than the full product document. Normalize it to
-      // the `_id`-based shape the rest of this page (handleOpenEdit) uses.
       handleOpenEdit({
-        _id: found.id,
+        _id: found._id || found.id,
         name: found.name,
         barcode: found.barcode,
         sellingPrice: found.sellingPrice,
         purchasePrice: found.purchasePrice,
         unit: found.unit,
         stock: found.stock,
-        category: found.category,
-        lowStockLimit: found.lowStockLimit, // not returned by this endpoint; falls back to "5" below
+        category: found.category?._id || found.category,
+        lowStockLimit: found.lowStockLimit ?? "5",
       });
       setScanNotice(`Found existing product: ${found.name}`);
     } catch (err) {
@@ -204,7 +209,7 @@ export default function Products() {
         // No product with this barcode yet — start a fresh "Add Product"
         // form with the scanned code already filled in.
         handleOpenAdd(code);
-        setScanNotice(`No product found for barcode "${code}" — enter details for a new product.`);
+        setScanNotice(`Scanned barcode "${code}". Please enter details to add this product.`);
       } else {
         setScanNotice(err.response?.data?.message || "Failed to look up scanned barcode");
       }
@@ -213,8 +218,9 @@ export default function Products() {
     }
   };
 
-  const handleOpenScanner = () => {
+  const handleOpenScanner = (target = "catalog") => {
     scanHandledRef.current = false;
+    setScannerTarget(target);
     setScanNotice("");
     setIsScannerOpen(true);
   };
@@ -566,13 +572,23 @@ export default function Products() {
 
           <div>
             <label className="mb-1 block text-sm font-medium text-slate-700">Barcode</label>
-            <input
-              type="text"
-              value={formData.barcode}
-              onChange={(e) => setFormData({ ...formData, barcode: e.target.value })}
-              placeholder="Optional barcode / code"
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none"
-            />
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={formData.barcode}
+                onChange={(e) => setFormData({ ...formData, barcode: e.target.value })}
+                placeholder="Optional barcode / code"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => handleOpenScanner("form")}
+                className="flex shrink-0 items-center gap-1.5 rounded-lg bg-ink-900 px-3 py-2 text-xs font-semibold text-white hover:bg-ink-800 transition-colors"
+                title="Scan barcode with camera"
+              >
+                <ScanLine size={16} /> Scan
+              </button>
+            </div>
           </div>
 
           <div className="mt-6 flex justify-end gap-3 pt-2">

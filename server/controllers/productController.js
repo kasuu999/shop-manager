@@ -241,8 +241,9 @@ export const getProductByBarcode = async (req, res) => {
       return res.status(404).json({ success: false, message: "No product found with this barcode" });
     }
  
-    // Only return the fields actually needed for billing
+    // Return full product info needed for billing and editing
     const billingInfo = {
+      _id: product._id,
       id: product._id,
       name: product.name,
       barcode: product.barcode,
@@ -250,7 +251,9 @@ export const getProductByBarcode = async (req, res) => {
       purchasePrice: product.purchasePrice,
       unit: product.unit,
       stock: product.stock,
+      lowStockLimit: product.lowStockLimit,
       category: product.category,
+      image: product.image,
     };
  
     return res.status(200).json({ success: true, data: billingInfo });

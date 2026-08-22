@@ -61,7 +61,7 @@ export default function Sales() {
       const [saleRes, custRes, prodRes] = await Promise.all([
         api.get("/sale"),
         api.get("/customers"),
-        api.get("/products"),
+        api.get("/products?limit=1000"),
       ]);
 
       if (saleRes.data?.success) setSales(saleRes.data.data);
@@ -90,8 +90,6 @@ export default function Sales() {
   };
 
   // Core "add or increment" logic, shared by manual click AND barcode scan.
-  // Returns a result object instead of alerting directly, so each caller
-  // (manual click vs. scan) can decide how to show that feedback.
   const addProductToCart = (product) => {
     if (product.stock <= 0) {
       return { ok: false, message: `${product.name} is out of stock.` };
@@ -120,28 +118,43 @@ export default function Sales() {
     if (!result.ok) alert(result.message);
   };
 
-  // Called by BarcodeScannerModal once a barcode is decoded. We match
-  // against the SAME `products` list already loaded for manual search
-  // (products already carry their `barcode` field) — no extra API round
-  // trip needed, and it keeps scan results using the exact same product
-  // objects/stock numbers as the rest of the POS.
-  const handleBarcodeScanned = (code) => {
-    if (scanHandledRef.current) return; // ignore repeat decodes of the same open session
+  const handleBarcodeScanned = async (code) => {
+    if (scanHandledRef.current) return;
     scanHandledRef.current = true;
+    setIsScannerOpen(false);
 
-    const matched = products.find((p) => p.barcode && p.barcode === code);
+    // Automatically open POS modal if scanning from main Sales page
+    setIsModalOpen(true);
+
+    const trimmedCode = code.trim();
+    let matched = products.find((p) => p.barcode && p.barcode.trim() === trimmedCode);
 
     if (!matched) {
-      setScanNotice(`No product found for barcode "${code}".`);
+      try {
+        const res = await api.get(`/products/barcode/${encodeURIComponent(trimmedCode)}`);
+        if (res.data?.success && res.data.data) {
+          const bData = res.data.data;
+          matched = {
+            _id: bData._id || bData.id,
+            name: bData.name,
+            barcode: bData.barcode,
+            sellingPrice: bData.sellingPrice,
+            purchasePrice: bData.purchasePrice,
+            unit: bData.unit,
+            stock: bData.stock,
+            lowStockLimit: bData.lowStockLimit,
+            category: bData.category,
+          };
+        }
+      } catch (_) {}
+    }
+
+    if (!matched) {
+      setScanNotice(`No product found for barcode "${trimmedCode}". Please add this product in Products menu first.`);
     } else {
       const result = addProductToCart(matched);
       setScanNotice(result.message);
     }
-
-    // Close the scanner after handling one scan — cashier taps "Scan
-    // Barcode" again for the next item. Keeps each scan a deliberate,
-    // single action instead of the camera silently re-triggering.
-    setIsScannerOpen(false);
   };
 
   const handleOpenScanner = () => {
@@ -277,12 +290,20 @@ export default function Sales() {
           <h2 className="text-2xl font-bold text-ink-900">Sales & Billing (POS)</h2>
           <p className="text-sm text-slate-500">Record customer sales and generate invoices.</p>
         </div>
-        <button
-          onClick={handleOpenPOS}
-          className="flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 transition-colors"
-        >
-          <Plus size={16} /> New Sale / POS Counter
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleOpenScanner}
+            className="flex items-center justify-center gap-2 rounded-lg bg-ink-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-ink-800 transition-colors"
+          >
+            <ScanLine size={16} /> Scan & Sell Barcode
+          </button>
+          <button
+            onClick={handleOpenPOS}
+            className="flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 transition-colors"
+          >
+            <Plus size={16} /> New Sale / POS Counter
+          </button>
+        </div>
       </div>
 
       {/* Table */}
