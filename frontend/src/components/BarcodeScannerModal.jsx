@@ -129,6 +129,7 @@ export default function BarcodeScannerModal({ isOpen, onClose, onScan, autoClose
 
     const videoEl = videoRef.current;
     if (!videoEl) return;
+    let activeStream = null;
 
     // Helper to process decoded barcode string
     const handleSuccessfulDecode = (rawText, format) => {
@@ -162,53 +163,113 @@ export default function BarcodeScannerModal({ isOpen, onClose, onScan, autoClose
       }
     };
 
-    // Start video stream with facingMode: environment
-    codeReader
-      .decodeFromConstraints(
-        {
+    // IMPORTANT iOS SAFARI FIX:
+    // ZXing's BrowserCodeReader builds its internal capture canvas ONCE,
+    // sized from videoEl.videoWidth/videoHeight at the moment of the very
+    // first decode attempt — and then caches that canvas size for the rest
+    // of the session. On iOS Safari, video.videoWidth/videoHeight can still
+    // read 0 for a short moment even after the "canplay" event fires (a
+    // known WebKit timing quirk with WebRTC video elements). If ZXing's
+    // first frame happens to run during that window, its canvas gets locked
+    // at 0x0 forever — the camera preview keeps looking perfectly normal,
+    // but every decode silently returns "not found" for the rest of the
+    // session. This is why scanning can look totally dead on iPhone while
+    // working fine on Android.
+    //
+    // Fix: we take control of getUserMedia + attaching the stream ourselves,
+    // and explicitly wait until the video element reports real pixel
+    // dimensions (with both an event listener AND a polling fallback, since
+    // Safari's 'canplay'/'loadedmetadata' timing isn't fully reliable)
+    // BEFORE ever handing the video element to ZXing.
+    const waitForVideoDimensions = (video) =>
+      new Promise((resolve) => {
+        if (video.videoWidth > 0 && video.videoHeight > 0) {
+          resolve();
+          return;
+        }
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          video.removeEventListener("loadedmetadata", onReady);
+          video.removeEventListener("canplay", onReady);
+          video.removeEventListener("playing", onReady);
+          clearInterval(poll);
+          clearTimeout(timeout);
+          resolve();
+        };
+        const onReady = () => {
+          if (video.videoWidth > 0 && video.videoHeight > 0) finish();
+        };
+        video.addEventListener("loadedmetadata", onReady);
+        video.addEventListener("canplay", onReady);
+        video.addEventListener("playing", onReady);
+        // Polling fallback: some iOS Safari versions fire these events
+        // before videoWidth/videoHeight are actually populated.
+        const poll = setInterval(onReady, 80);
+        // Absolute safety net so we never hang the UI forever.
+        const timeout = setTimeout(finish, 4000);
+      });
+
+    const startCamera = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: { ideal: "environment" },
             width: { ideal: 1280 },
             height: { ideal: 720 },
           },
-        },
-        videoEl,
-        (result, err) => {
+        });
+        if (cancelled) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        activeStream = stream;
+
+        videoEl.srcObject = stream;
+        videoEl.setAttribute("playsinline", "true");
+        videoEl.setAttribute("muted", "true");
+        videoEl.muted = true;
+        await videoEl.play().catch(() => {});
+
+        // Wait for REAL, non-zero pixel dimensions before letting ZXing
+        // build its capture canvas (see comment above).
+        await waitForVideoDimensions(videoEl);
+        if (cancelled) return;
+
+        setStarting(false);
+
+        // Check torch capability
+        try {
+          const track = stream.getVideoTracks?.()?.[0];
+          if (track && track.getCapabilities && track.getCapabilities().torch) {
+            setHasTorch(true);
+          }
+        } catch (_) {}
+
+        // Now hand the already-ready video element to ZXing for continuous
+        // decoding — its internal canvas will be sized correctly from frame 1.
+        codeReader.decodeFromVideoElementContinuously(videoEl, (result, err) => {
           if (cancelled) return;
           if (result && result.getText()) {
             handleSuccessfulDecode(result.getText(), ZXING_FORMAT_NAMES[result.getBarcodeFormat()]);
           }
-        }
-      )
-      .then(() => {
-        if (cancelled) return;
-        setStarting(false);
-
-        // Ensure iOS Safari playback works without pausing
-        if (videoEl) {
-          videoEl.setAttribute("playsinline", "true");
-          videoEl.setAttribute("muted", "true");
-          videoEl.play().catch(() => {});
-
-          // Check torch capability
-          try {
-            const stream = videoEl.srcObject;
-            const track = stream?.getVideoTracks?.()?.[0];
-            if (track && track.getCapabilities && track.getCapabilities().torch) {
-              setHasTorch(true);
-            }
-          } catch (_) {}
-        }
-      })
-      .catch((err) => {
+        });
+      } catch (err) {
         if (cancelled) return;
         setStarting(false);
         setError(
           "Could not access camera. Please check camera permissions in your mobile browser, or upload an image / type barcode digits in 'Type Barcode' tab."
         );
-      });
+      }
+    };
+
+    startCamera();
 
     // Parallel Native BarcodeDetector loop for lightning-fast hardware detection
+    // (Android Chrome mainly — Safari/iOS doesn't support this API yet, so
+    // this loop simply stays a harmless no-op there and ZXing above carries
+    // the whole load on iPhone.)
     const nativeTimer = setInterval(async () => {
       if (cancelled || isHandlingScanRef.current || !videoEl || videoEl.readyState < 2) return;
       const detected = await detectWithNativeAPI(videoEl);
@@ -223,6 +284,11 @@ export default function BarcodeScannerModal({ isOpen, onClose, onScan, autoClose
       try {
         codeReader.reset();
       } catch (_) {}
+      if (activeStream) {
+        try {
+          activeStream.getTracks().forEach((t) => t.stop());
+        } catch (_) {}
+      }
     };
   }, [isOpen, activeTab, autoCloseOnScan]);
 
