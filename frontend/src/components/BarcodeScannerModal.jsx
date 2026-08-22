@@ -1,8 +1,23 @@
 import { useEffect, useRef, useState } from "react";
-import { Html5Qrcode } from "html5-qrcode";
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
 import { X, Camera, AlertTriangle } from "lucide-react";
 
 const SCANNER_ELEMENT_ID = "barcode-scanner-viewport";
+
+// Retail products almost always use these barcode formats — restricting to
+// just these (instead of also trying QR codes, Aztec, PDF417, etc.) makes
+// the decoder faster AND more accurate, since it isn't wasting cycles
+// checking formats that will never match a product barcode.
+const RETAIL_BARCODE_FORMATS = [
+  Html5QrcodeSupportedFormats.EAN_13,
+  Html5QrcodeSupportedFormats.EAN_8,
+  Html5QrcodeSupportedFormats.UPC_A,
+  Html5QrcodeSupportedFormats.UPC_E,
+  Html5QrcodeSupportedFormats.CODE_128,
+  Html5QrcodeSupportedFormats.CODE_39,
+  Html5QrcodeSupportedFormats.ITF,
+  Html5QrcodeSupportedFormats.CODABAR,
+];
 
 /**
  * Camera-based barcode scanner, built on html5-qrcode (uses the browser's
@@ -30,10 +45,24 @@ export default function BarcodeScannerModal({ isOpen, onClose, onScan }) {
 
     scanner
       .start(
-        { facingMode: "environment" }, // rear camera on mobile
+        { facingMode: "environment" }, // rear camera on mobile — this argument only accepts camera-selection fields like facingMode/deviceId
         {
           fps: 10,
-          qrbox: { width: 250, height: 150 }, // wide box suits 1D barcodes (EAN/UPC/CODE128)
+          // A wider, shorter box matches the shape of most 1D retail
+          // barcodes better than a square one, and helps the person aim
+          // correctly.
+          qrbox: { width: 280, height: 120 },
+          formatsToSupport: RETAIL_BARCODE_FORMATS,
+          // Requesting a higher resolution than the browser's default makes
+          // a BIG difference for reading 1D barcodes (thin bars need enough
+          // pixels to distinguish clearly). This belongs here, inside the
+          // scan config's videoConstraints — NOT in the camera-selector
+          // argument above, which only understands facingMode/deviceId.
+          videoConstraints: {
+            facingMode: "environment",
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+          },
         },
         (decodedText) => {
           // Fires on every successful decode — parent decides what happens next.
@@ -107,8 +136,8 @@ export default function BarcodeScannerModal({ isOpen, onClose, onScan }) {
               className="overflow-hidden rounded-lg border border-slate-200 bg-slate-900"
             />
             <p className="mt-3 text-center text-xs text-slate-500">
-              Point the camera at a product barcode. It will be added automatically once
-              recognized.
+              Hold the barcode flat, well-lit, and about 10–15cm from the camera.
+              It will be added automatically once recognized.
             </p>
           </>
         )}
